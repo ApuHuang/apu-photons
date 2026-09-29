@@ -9,6 +9,7 @@ import csv
 import json
 from pathlib import Path
 
+from ..i18n import Msg
 from ..model import PickMetrics
 
 SCHEMA = "apupick/1"
@@ -44,14 +45,14 @@ def load_pick_sidecar(folder: Path, warnings: list[str] | None = None) -> dict[s
         if jpath.is_file():
             doc = json.loads(jpath.read_text(encoding="utf-8"))
             if doc.get("schema") != SCHEMA:
-                warn(f"{jpath.name}: 不認得的 schema {doc.get('schema')!r}，略過 APU Pick 資料")
+                warn(Msg("msg.pick_schema", name=jpath.name, schema=repr(doc.get("schema"))))
                 return None
             rows = list(doc.get("frames", []))
         elif cpath.is_file():
             with cpath.open(newline="", encoding="utf-8-sig") as fh:
                 rows = list(csv.DictReader(fh))
     except (OSError, ValueError) as exc:
-        warn(f"APU Pick sidecar 讀取失敗：{exc}")
+        warn(Msg("msg.pick_read_failed", error=exc))
         return None
     if rows is None:
         return None

@@ -16,6 +16,7 @@ import numpy as np
 from .backend import CPU, Backend
 from .combine import HIGH, LOW, OUT_OF_BOUNDS, clip_combine
 from .debayer import bilinear
+from .i18n import Msg
 
 WARP_MARGIN = 8
 
@@ -154,7 +155,7 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
     if be.gpu:
         budget = min(memory_mb * 2 ** 20 * 4, int((be.memory_bytes() or 0) * 0.45))
         band = int(max(8, min(h, budget // bytes_per_row)))
-        log(f"整合（GPU {be.device}），每段 {band} 列")
+        log(Msg("msg.integrate_gpu", device=be.device, band=band))
         cals = [np.load(j.cal_path, mmap_mode="r") for j in jobs]
         bands = [(r0, min(h, r0 + band)) for r0 in range(0, h, band)]
         with ThreadPoolExecutor(max_workers=max(2, workers)) as io:
@@ -171,14 +172,14 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
                 cov, cnt = _write_band(spec, r0, be.to_numpy(master), be.to_numpy(codes))
                 coverage[r0:r1], counts = cov, counts + cnt
                 be.free()
-                log(f"整合 {r1}/{h} 列")
+                log(Msg("msg.integrate_rows", done=r1, total=h))
                 if progress:
                     progress(r1, h)
         return coverage, counts
 
     band = int(max(8, min(h, memory_mb * 2 ** 20 // max(1, workers) // bytes_per_row)))
     bands = [(r0, min(h, r0 + band)) for r0 in range(0, h, band)]
-    log(f"整合（CPU {workers} 個行程），每段 {band} 列、共 {len(bands)} 段")
+    log(Msg("msg.integrate_cpu", workers=workers, band=band, bands=len(bands)))
     if workers <= 1:
         _init_worker(jobs, weights, spec)
         results = map(_cpu_band, bands)
@@ -193,7 +194,7 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
             coverage[r0:r0 + cov.shape[0]] = cov
             counts += cnt
             done += cov.shape[0]
-            log(f"整合 {done}/{h} 列")
+            log(Msg("msg.integrate_rows", done=done, total=h))
             if progress:
                 progress(done, h)
     finally:

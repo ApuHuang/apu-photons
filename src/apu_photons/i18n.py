@@ -1,7 +1,9 @@
 """介面文字：繁體中文（預設）與英文，用詞比照 APU Astro 與 APU Pick。
 
 程式裡只放代號，顯示時才用 tr() 依目前語言轉成文字。兩份的代號必須一致（tests/test_gui.py 會檢查）。
-疊圖引擎的紀錄與警告目前只有繁體中文（與 APU Pick 的命令列相同）。
+
+疊圖引擎的警告與錯誤存成 Msg（代號＋參數），顯示時才轉成文字：介面換語言後，已經產生的警告也跟著換。
+紀錄（log）在寫出當下依目前語言產生。
 """
 
 from __future__ import annotations
@@ -30,6 +32,24 @@ def tr(key: str, **kw: object) -> str:
     if text is None:
         text = _CATALOG[DEFAULT_LANGUAGE][key]
     return text.format(**kw) if kw else text
+
+
+class Msg:
+    """延後翻譯的訊息：str() 時才依目前語言產生文字。參數本身也可以是 Msg（例如對齊失敗的原因）。"""
+
+    __slots__ = ("key", "kw")
+
+    def __init__(self, key: str, **kw: object):
+        self.key, self.kw = key, kw
+
+    def __str__(self) -> str:
+        return tr(self.key, **self.kw)
+
+    def __repr__(self) -> str:
+        return f"Msg({self.key!r}, {self.kw!r})"
+
+    def __contains__(self, text: str) -> bool:
+        return text in str(self)
 
 
 _ZH: dict[str, str] = {
@@ -303,5 +323,200 @@ _EN: dict[str, str] = {
     "gui.stage.output": "Writing output",
     "gui.close.confirm": "Stacking is still running. Stop and close?",
 }
+
+# 疊圖引擎（警告、錯誤、紀錄）與命令列
+_ZH.update({
+    'msg.drizzle_scale': 'Drizzle 倍率目前只支援 1× 或 2×',
+    'msg.drizzle_no_downsample': 'Drizzle 與 Downsample 0.5× 不能同時使用，這次不做 Downsample',
+    'msg.preview_sample': '試跑：抽樣 {n} 張',
+    'msg.no_lights': '沒有可用的 light frame',
+    'msg.lights_summary': 'Light {n} 張、{sessions} 個 session；{kind}，{w}×{h}',
+    'msg.mono': '單色',
+    'msg.session': '  session {id}：{n} 張，像素尺度 {scale}',
+    'msg.unknown': '未知',
+    'msg.compute': '運算：CPU {workers} 個行程{gpu}',
+    'msg.compute_gpu': '、GPU {device}',
+    'msg.calib_failed': '{name}: 校正失敗（{error}）',
+    'msg.too_few_stars': '{name}: 只偵測到 {n} 顆星，不使用',
+    'msg.no_stars_all': '所有 frame 都找不到足夠的星點',
+    'msg.reference': '參考 frame：{name}（FWHM {fwhm:.2f} px、{n} 顆星）',
+    'msg.reg_failed': '{name}: 對齊失敗（{error}）',
+    'msg.registered': '對齊成功 {n} 張',
+    'msg.all_pick_rejected': '所有 frame 都被 APU Pick 淘汰',
+    'msg.stack_saved': '一般疊圖另存 {name}',
+    'msg.output': '輸出 {path}（{w}×{h}）',
+    'msg.done': '完成，耗時 {seconds:.0f} 秒',
+    'msg.bad_reference': '指定的參考 frame {name} 不可用，改用自動選擇',
+    'msg.integrate_start': '整合 {n} 張（{method}，low {low}σ / high {high}σ）',
+    'msg.drizzle_few': 'Drizzle 在張數夠多（建議 20 張以上）且有 dither 時效果最好；目前 {n} 張、dither 範圍 {dither} px，結果可能出現格紋或空洞',
+    'msg.drizzle_oversampled': '星點 FWHM {fwhm:.1f} px 已經取樣充足，{scale}× drizzle 能增加的細節有限',
+    'msg.drizzle_start': '{cfa}Drizzle {scale}×，pixfrac {pixfrac}，{n} 張',
+    'msg.drizzle_holes': 'Drizzle 輸出有 {fraction:.1%} 的像素沒有資料{filled}；可以提高 pixfrac 或增加張數',
+    'msg.drizzle_holes_filled': '（已用鄰近像素補上）',
+    'msg.size_mismatch': '{name}: 尺寸 {shape} 與 {first} {first_shape} 不同',
+    'msg.master_cached': 'master {kind}: 使用快取 {name}',
+    'msg.master_combine': 'master {kind}: 整合 {n} 張',
+    'msg.flat_no_sub': 'Flat 沒有 flat-dark 或 bias 可以扣，flat 會含有偏壓，校正結果可能偏差',
+    'msg.no_dark_bias': '沒有 dark 也沒有 bias，這次不扣暗電流與偏壓',
+    'msg.no_flat': '沒有 flat，這次不做平場校正（暗角與灰塵不會被修正）',
+    'msg.bad_pixels': '壞像素（來自 master dark / flat）：{n} 個',
+    'msg.no_images': '{folder}: 找不到影像檔',
+    'msg.read_failed': '{name}: 讀取失敗（{error}）',
+    'msg.pick_no_hash': '{name}: APU Pick sidecar 裡沒有對應的 hash，略過該張的 Pick 資料',
+    'msg.incompatible': '{name}: 尺寸或 Bayer 排列與其他 frame 不同（{shape}, {bayer}），不使用',
+    'msg.integrate_gpu': '整合（GPU {device}），每段 {band} 列',
+    'msg.integrate_cpu': '整合（CPU {workers} 個行程），每段 {band} 列、共 {bands} 段',
+    'msg.integrate_rows': '整合 {done}/{total} 列',
+    'msg.drizzle_gpu': 'Drizzle（GPU {device}），每條 {rows} 列、共 {strips} 條',
+    'msg.drizzle_cpu': 'Drizzle（CPU {workers} 個行程），每條 {rows} 列、共 {strips} 條',
+    'msg.drizzle_rows': 'Drizzle {done}/{total} 列',
+    'msg.prepare_progress': '校正與找星 {done}/{total}',
+    'msg.reg.few_stars': '星點太少',
+    'msg.reg.no_triangles': '星點太少，組不出三角形',
+    'msg.reg.no_match': '找不到對應的星點三角形',
+    'msg.reg.ransac': 'RANSAC 找不到一致的變換',
+    'msg.reg.few_matches': '配對到的星點只有 {n} 顆',
+    'msg.reg.residual': '對齊殘差 {rms:.2f} px 過大',
+    'msg.not_2d': '{name}: 只支援 2D 影像（單色或 CFA），這張是 {shape}',
+    'msg.raw_bayer_only': '{name}: 只支援 2×2 Bayer 的 RAW',
+    'msg.pick_schema': '{name}: 不認得的 schema {schema}，略過 APU Pick 資料',
+    'msg.pick_read_failed': 'APU Pick sidecar 讀取失敗：{error}',
+    'msg.no_gpu': '沒有 NVIDIA GPU',
+    'msg.gpu_required': '找不到可用的 NVIDIA GPU（需要 CuPy 與 CUDA 驅動）：{error}',
+    'cli.description': 'APU Photons：天文攝影校正、對齊、疊圖',
+    'cli.lang': '介面語言（zh 繁體中文、en English）',
+    'cli.stack': '校正、對齊並整合 light frames',
+    'cli.lights': 'light frame 資料夾（可以多個，例如不同晚）',
+    'cli.output': '輸出的 master FITS',
+    'cli.bias': 'bias 資料夾',
+    'cli.dark': 'dark 資料夾',
+    'cli.flat': 'flat 資料夾',
+    'cli.flat_dark': 'flat-dark 資料夾',
+    'cli.rejection': '剔除方式',
+    'cli.low': '低端剔除 σ（預設 4）',
+    'cli.high': '高端剔除 σ（預設 3）',
+    'cli.no_weights': '不加權（每張權重相同）',
+    'cli.pick_boost': '用 APU Pick 分數加成權重（預設只當篩選）',
+    'cli.reference': '指定參考 frame 的檔名',
+    'cli.downsample': '輸出 0.5×（整合後 2×2 平均）',
+    'cli.drizzle': 'Drizzle 輸出倍率（OSC 自動用 CFA drizzle）；一般疊圖另存為 *_stack.fits',
+    'cli.pixfrac': 'Drizzle 的 drop 大小（預設 0.9）',
+    'cli.no_fill_holes': 'Drizzle 沒資料的像素保留為空（NaN→0）',
+    'cli.gpu': '整合與 drizzle 用 NVIDIA GPU（auto：有就用）',
+    'cli.workers': 'CPU 平行處理數（預設：核心數 − 1）',
+    'cli.no_crop': '不裁切到共同區域',
+    'cli.bits': '輸出位元深度',
+    'cli.memory': '整合時的記憶體上限（MB，預設 2048）',
+    'cli.one_session': '不依觀測夜分 session',
+    'cli.no_rejection_maps': '不保存每張的剔除遮罩（省硬碟；之後 drizzle 需要）',
+    'cli.preview': '只抽樣 N 張快速試跑',
+    'cli.cache': '快取資料夾（預設：輸出旁的 .photons_cache）',
+    'cli.error': '錯誤：{error}',
+    'cli.summary': '整合 {used}/{total} 張 → {output}',
+    'cli.unused': '未使用：{items}',
+    'cli.suspicious': '剔除像素特別多（可能有衛星、飛機或雲）：{files}',
+    'cli.drizzle_holes': 'Drizzle {scale}×：沒有資料的像素 {holes}',
+    'cli.drizzle_ok': 'Drizzle 適用性：適合',
+    'cli.drizzle_no': 'Drizzle 適用性：不建議（張數或 dither 不足）',
+    'cli.recipe': 'Recipe：{path}',
+    'cli.sep': '、',
+})
+
+_EN.update({
+    'msg.drizzle_scale': 'Drizzle scale must be 1× or 2×',
+    'msg.drizzle_no_downsample': 'Drizzle and the 0.5× downsample cannot be combined; skipping the downsample',
+    'msg.preview_sample': 'Trial: sampled {n} frames',
+    'msg.no_lights': 'No usable light frames',
+    'msg.lights_summary': '{n} lights, {sessions} sessions; {kind}, {w}×{h}',
+    'msg.mono': 'mono',
+    'msg.session': '  session {id}: {n} frames, pixel scale {scale}',
+    'msg.unknown': 'unknown',
+    'msg.compute': 'Compute: {workers} CPU processes{gpu}',
+    'msg.compute_gpu': ', GPU {device}',
+    'msg.calib_failed': '{name}: calibration failed ({error})',
+    'msg.too_few_stars': '{name}: only {n} stars detected; not used',
+    'msg.no_stars_all': 'No frame has enough stars',
+    'msg.reference': 'Reference frame: {name} (FWHM {fwhm:.2f} px, {n} stars)',
+    'msg.reg_failed': '{name}: registration failed ({error})',
+    'msg.registered': '{n} frames registered',
+    'msg.all_pick_rejected': 'Every frame was rejected by APU Pick',
+    'msg.stack_saved': 'Regular stack saved as {name}',
+    'msg.output': 'Output {path} ({w}×{h})',
+    'msg.done': 'Done in {seconds:.0f} s',
+    'msg.bad_reference': 'Reference frame {name} is not usable; choosing one automatically',
+    'msg.integrate_start': 'Integrating {n} frames ({method}, low {low}σ / high {high}σ)',
+    'msg.drizzle_few': 'Drizzle works best with enough frames (20+) and dither; there are {n} frames with {dither} px of dither, so the result may show a grid pattern or holes',
+    'msg.drizzle_oversampled': 'Stars are already well sampled (FWHM {fwhm:.1f} px); {scale}× drizzle adds little detail',
+    'msg.drizzle_start': '{cfa}Drizzle {scale}×, pixfrac {pixfrac}, {n} frames',
+    'msg.drizzle_holes': '{fraction:.1%} of the Drizzle output has no data{filled}; raise pixfrac or add frames',
+    'msg.drizzle_holes_filled': ' (filled from neighbours)',
+    'msg.size_mismatch': '{name}: size {shape} differs from {first} {first_shape}',
+    'msg.master_cached': 'master {kind}: using cached {name}',
+    'msg.master_combine': 'master {kind}: combining {n} frames',
+    'msg.flat_no_sub': 'Flats have no flat-dark or bias to subtract, so they include the bias; calibration may be off',
+    'msg.no_dark_bias': 'No dark or bias; dark current and bias are not removed',
+    'msg.no_flat': 'No flat; vignetting and dust are not corrected',
+    'msg.bad_pixels': 'Bad pixels (from master dark / flat): {n}',
+    'msg.no_images': '{folder}: no image files found',
+    'msg.read_failed': '{name}: could not be read ({error})',
+    'msg.pick_no_hash': '{name}: not in the APU Pick sidecar (hash mismatch); ignoring its Pick data',
+    'msg.incompatible': '{name}: size or Bayer pattern differs from the other frames ({shape}, {bayer}); not used',
+    'msg.integrate_gpu': 'Integrating on GPU {device}, {band} rows per band',
+    'msg.integrate_cpu': 'Integrating with {workers} CPU processes, {band} rows per band, {bands} bands',
+    'msg.integrate_rows': 'Integrated {done}/{total} rows',
+    'msg.drizzle_gpu': 'Drizzle on GPU {device}, {rows} rows per strip, {strips} strips',
+    'msg.drizzle_cpu': 'Drizzle with {workers} CPU processes, {rows} rows per strip, {strips} strips',
+    'msg.drizzle_rows': 'Drizzle {done}/{total} rows',
+    'msg.prepare_progress': 'Calibrated and measured {done}/{total}',
+    'msg.reg.few_stars': 'too few stars',
+    'msg.reg.no_triangles': 'too few stars to form triangles',
+    'msg.reg.no_match': 'no matching star triangles',
+    'msg.reg.ransac': 'RANSAC found no consistent transform',
+    'msg.reg.few_matches': 'only {n} stars matched',
+    'msg.reg.residual': 'residual {rms:.2f} px is too large',
+    'msg.not_2d': '{name}: only 2D images (mono or CFA) are supported; this one is {shape}',
+    'msg.raw_bayer_only': '{name}: only 2×2 Bayer RAW files are supported',
+    'msg.pick_schema': '{name}: unknown schema {schema}; ignoring APU Pick data',
+    'msg.pick_read_failed': 'Could not read the APU Pick sidecar: {error}',
+    'msg.no_gpu': 'no NVIDIA GPU',
+    'msg.gpu_required': 'No usable NVIDIA GPU (CuPy and a CUDA driver are required): {error}',
+    'cli.description': 'APU Photons: calibration, registration and stacking for astrophotography',
+    'cli.lang': 'language (zh Traditional Chinese, en English)',
+    'cli.stack': 'calibrate, register and integrate light frames',
+    'cli.lights': 'light frame folders (several allowed, e.g. one per night)',
+    'cli.output': 'output master FITS',
+    'cli.bias': 'bias folder',
+    'cli.dark': 'dark folder',
+    'cli.flat': 'flat folder',
+    'cli.flat_dark': 'flat-dark folder',
+    'cli.rejection': 'rejection method',
+    'cli.low': 'low rejection σ (default 4)',
+    'cli.high': 'high rejection σ (default 3)',
+    'cli.no_weights': 'no weighting (every frame counts the same)',
+    'cli.pick_boost': 'let the APU Pick score boost the weight (by default Pick only filters)',
+    'cli.reference': 'file name of the reference frame',
+    'cli.downsample': '0.5× output (2×2 average after integration)',
+    'cli.drizzle': 'Drizzle output scale (CFA drizzle for colour cameras); the regular stack is saved as *_stack.fits',
+    'cli.pixfrac': 'Drizzle drop size (default 0.9)',
+    'cli.no_fill_holes': 'leave Drizzle pixels without data empty (NaN→0)',
+    'cli.gpu': 'use an NVIDIA GPU for integration and drizzle (auto: when available)',
+    'cli.workers': 'CPU processes (default: cores − 1)',
+    'cli.no_crop': 'do not crop to the common area',
+    'cli.bits': 'output bit depth',
+    'cli.memory': 'memory limit for integration (MB, default 2048)',
+    'cli.one_session': 'do not split sessions by night',
+    'cli.no_rejection_maps': 'do not keep per-frame rejection maps (saves disk; drizzle needs them)',
+    'cli.preview': 'stack a sample of N frames as a quick trial',
+    'cli.cache': 'cache folder (default: .photons_cache next to the output)',
+    'cli.error': 'Error: {error}',
+    'cli.summary': 'Integrated {used}/{total} frames → {output}',
+    'cli.unused': 'Unused: {items}',
+    'cli.suspicious': 'Many rejected pixels (satellite, plane or cloud?): {files}',
+    'cli.drizzle_holes': 'Drizzle {scale}×: pixels without data {holes}',
+    'cli.drizzle_ok': 'Drizzle: suitable',
+    'cli.drizzle_no': 'Drizzle: not recommended (too few frames or too little dither)',
+    'cli.recipe': 'Recipe: {path}',
+    'cli.sep': ', ',
+})
 
 _CATALOG = {"zh": _ZH, "en": _EN}

@@ -13,6 +13,8 @@ from types import ModuleType
 import numpy as np
 import scipy.ndimage as _scipy_ndi
 
+from .i18n import Msg
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -45,7 +47,7 @@ class Backend:
 
 CPU = Backend("cpu", np, _scipy_ndi)
 # 最近一次 GPU 偵測失敗的原因（給錯誤訊息與介面顯示）
-last_error: str | None = None
+last_error: str | Msg | None = None
 
 
 def _try_cuda() -> Backend | None:
@@ -59,7 +61,7 @@ def _try_cuda() -> Backend | None:
             import cupyx.scipy.ndimage as cndi
 
         if cp.cuda.runtime.getDeviceCount() < 1:
-            last_error = "沒有 NVIDIA GPU"
+            last_error = Msg("msg.no_gpu")
             return None
         props = cp.cuda.runtime.getDeviceProperties(0)
         cp.asarray([1.0]).sum()  # 真的能跑才算
@@ -76,7 +78,7 @@ def select(mode: str = "auto") -> Backend:
         return CPU
     be = _try_cuda()
     if be is None and mode == "gpu":
-        raise RuntimeError(f"找不到可用的 NVIDIA GPU（需要 CuPy 與 CUDA 驅動）：{last_error}")
+        raise RuntimeError(Msg("msg.gpu_required", error=last_error))
     return be or CPU
 
 

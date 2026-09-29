@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
+from .i18n import Msg
+
 FITS_SUFFIXES = {".fit", ".fits", ".fts"}
 RAW_SUFFIXES = {".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".pef", ".dng", ".srw"}
 IMAGE_SUFFIXES = FITS_SUFFIXES | RAW_SUFFIXES
@@ -53,7 +55,7 @@ def load_image(path: Path) -> tuple[np.ndarray, fits.Header]:
         data = np.asarray(hdu.data, dtype=np.float32)
         header = hdu.header.copy()
     if data.ndim != 2:
-        raise ValueError(f"{path.name}: 只支援 2D 影像（單色或 CFA），這張是 {data.shape}")
+        raise ValueError(Msg("msg.not_2d", name=path.name, shape=data.shape))
     return data, header
 
 
@@ -67,7 +69,7 @@ def _load_raw(path: Path) -> tuple[np.ndarray, fits.Header]:
         pattern = raw.raw_pattern
         if data.ndim != 2 or pattern is None or pattern.shape != (2, 2):
             # X-Trans 與已解馬賽克的 DNG：MVP 不支援
-            raise ValueError(f"{path.name}: 只支援 2×2 Bayer 的 RAW")
+            raise ValueError(Msg("msg.raw_bayer_only", name=path.name))
         data -= black[raw.raw_colors_visible]
         desc = raw.color_desc.decode()
         header["BAYERPAT"] = "".join(desc[c] for c in pattern.flatten())

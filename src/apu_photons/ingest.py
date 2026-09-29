@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .i18n import Msg
 from .imageio import bayer_pattern, file_sha256, list_images, read_header
 from .integrations.pick import load_pick_sidecar
 from .model import Calibration, Frame, Project, Session
@@ -52,7 +53,7 @@ def ingest(light_dirs: list[Path], calibration: Calibration, warnings: list[str]
     for folder in light_dirs:
         paths = list_images(folder)
         if not paths:
-            warnings.append(f"{folder}: 找不到影像檔")
+            warnings.append(Msg("msg.no_images", folder=folder))
         pick = load_pick_sidecar(folder, warnings)
         for p in paths:
             try:
@@ -60,12 +61,12 @@ def ingest(light_dirs: list[Path], calibration: Calibration, warnings: list[str]
             except Exception as exc:  # noqa: BLE001  單張壞檔不中斷
                 f = Frame(path=p)
                 f.reject("unreadable")
-                warnings.append(f"{p.name}: 讀取失敗（{exc}）")
+                warnings.append(Msg("msg.read_failed", name=p.name, error=exc))
             if pick is not None:
                 f.hash = file_sha256(p)
                 hit = pick.get(f.hash)
                 if hit is None:
-                    warnings.append(f"{p.name}: APU Pick sidecar 裡沒有對應的 hash，略過該張的 Pick 資料")
+                    warnings.append(Msg("msg.pick_no_hash", name=p.name))
                 else:
                     f.pick_metrics = hit[1]
                     f.pick_group = hit[1].group
@@ -104,4 +105,4 @@ def _check_compatible(frames: list[Frame], warnings: list[str]) -> None:
     for f in ok:
         if f.shape != shape or f.bayer != bayer:
             f.reject("incompatible")
-            warnings.append(f"{f.name}: 尺寸或 Bayer 排列與其他 frame 不同（{f.shape}, {f.bayer}），不使用")
+            warnings.append(Msg("msg.incompatible", name=f.name, shape=f.shape, bayer=f.bayer))

@@ -23,6 +23,7 @@ from .backend import default_workers
 from .calibration import ALGO_VERSION as CALIB_VERSION, build_masters
 from .drizzle import DrizzleSpec
 from .imageio import cfa_masks, write_fits
+from .i18n import Msg
 from .ingest import ingest
 from .integrate import BandSpec, FrameJob
 from .model import ACCEPTED, Calibration, Frame, Project
@@ -123,9 +124,9 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
     log(f"APU Photons {__version__}")
     report("ingest")
     if s.drizzle not in (0, 1, 2):
-        raise RuntimeError("Drizzle 倍率目前只支援 1× 或 2×")
+        raise RuntimeError(Msg("msg.drizzle_scale"))
     if s.drizzle and s.downsample != 1.0:
-        warnings.append("Drizzle 與 Downsample 0.5× 不能同時使用，這次不做 Downsample")
+        warnings.append(Msg("msg.drizzle_no_downsample"))
         s.downsample = 1.0
     # ---- Stage 0 ----
     project = ingest(light_dirs, calibration, warnings, name=output.stem, split_nights=s.split_nights)
@@ -136,15 +137,15 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
             if id(f) not in chosen:
                 f.reject("not_in_preview")
         frames = [f for f in frames if f.accepted]
-        log(f"Preview：抽樣 {len(frames)} 張")
+        log(Msg("msg.preview_sample", n=len(frames)))
     if not frames:
-        raise RuntimeError("沒有可用的 light frame")
+        raise RuntimeError(Msg("msg.no_lights"))
     bayer, shape = frames[0].bayer, frames[0].shape
-    log(f"Light {len(project.frames)} 張、{len(project.sessions)} 個 session；"
-        f"{'OSC ' + bayer if bayer else '單色'}，{shape[1]}×{shape[0]}")
+    log(Msg("msg.lights_summary", n=len(project.frames), sessions=len(project.sessions),
+            kind=f"OSC {bayer}" if bayer else Msg("msg.mono"), w=shape[1], h=shape[0]))
     for sess in project.sessions:
-        log(f"  session {sess.id}：{len(sess.frames)} 張，像素尺度 "
-            f"{'%.2f″/px' % sess.pixel_scale_arcsec if sess.pixel_scale_arcsec else '未知'}")
+        scale = f"{sess.pixel_scale_arcsec:.2f}″/px" if sess.pixel_scale_arcsec else Msg("msg.unknown")
+        log(Msg("msg.session", id=sess.id, n=len(sess.frames), scale=scale))
 
     # ---- Stage 1 ----
     report("masters")
@@ -155,27 +156,27 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
     cdir.mkdir(exist_ok=True)
     workers = s.workers or default_workers()
     be = backend.select(s.gpu)
-    log(f"運算：CPU {workers} 個行程" + (f"、GPU {be.device}" if be.gpu else ""))
+    log(Msg("msg.compute", workers=workers, gpu=Msg("msg.compute_gpu", device=be.device) if be.gpu else ""))
     tasks = [(str(f.path), str(cdir / f"{_calib_key(f, calibration)}.npy")) for f in frames]
     for f, (src, dst), (stars, err) in zip(frames, tasks, prepare(tasks, masters, bayer, workers, log,
                                                                           lambda d, t: report("prepare", d, t))):
         f.calibrated_path = Path(dst)
         if err is not None:
             f.reject("unreadable")
-            warnings.append(f"{f.name}: 校正失敗（{err}）")
+            warnings.append(Msg("msg.calib_failed", name=f.name, error=err))
             continue
         f.stars = stars
         if len(f.stars) < MIN_STARS:
             f.reject("too_few_stars")
-            warnings.append(f"{f.name}: 只偵測到 {len(f.stars)} 顆星，不使用")
+            warnings.append(Msg("msg.too_few_stars", name=f.name, n=len(f.stars)))
     frames = [f for f in frames if f.accepted]
     if not frames:
-        raise RuntimeError("所有 frame 都找不到足夠的星點")
+        raise RuntimeError(Msg("msg.no_stars_all"))
 
     # ---- Stage 3 參考 frame + 對齊 ----
     ref = _choose_reference(frames, s.reference, warnings)
     project.reference = ref
-    log(f"參考 frame：{ref.name}（FWHM {ref.stars.fwhm:.2f} px、{len(ref.stars)} 顆星）")
+    log(Msg("msg.reference", name=ref.name, fwhm=ref.stars.fwhm, n=len(ref.stars)))
     ref_xy = np.column_stack([ref.stars.x, ref.stars.y])
     flux_ratio: dict[int, float] = {}
     for i, f in enumerate(frames, 1):
@@ -188,7 +189,7 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
             m, rms, si, ri = register(np.column_stack([f.stars.x, f.stars.y]), ref_xy)
         except RegistrationError as exc:
             f.reject("registration_failed")
-            warnings.append(f"{f.name}: 對齊失敗（{exc}）")
+            warnings.append(Msg("msg.reg_failed", name=f.name, error=exc))
             continue
         f.transform, f.registration_residual_px = m, round(rms, 4)
         with np.errstate(all="ignore"):
@@ -196,7 +197,7 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
         r = r[np.isfinite(r) & (r > 0)]
         flux_ratio[id(f)] = float(np.median(r)) if len(r) else 1.0
     frames = [f for f in frames if f.accepted]
-    log(f"對齊成功 {len(frames)} 張")
+    log(Msg("msg.registered", n=len(frames)))
 
     # ---- Stage 4 Normalize ----
     ref_loc = _channel_locations(np.load(ref.calibrated_path, mmap_mode="r"), bayer)
@@ -212,7 +213,7 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
             f.reject("pick")
     frames = [f for f in frames if f.accepted]
     if not frames:
-        raise RuntimeError("所有 frame 都被 APU Pick 淘汰")
+        raise RuntimeError(Msg("msg.all_pick_rejected"))
     _weights(frames, s)
 
     # ---- Stage 6 Integrate ----
@@ -239,7 +240,7 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
         stack_out = output.with_name(output.stem + "_stack" + output.suffix)
         std, std_crop = (_crop_common(master, coverage, len(frames)) if s.crop_common else (master, None))
         write_fits(stack_out, std, hdr, bits=s.output_bits)
-        log(f"一般疊圖另存 {stack_out.name}")
+        log(Msg("msg.stack_saved", name=stack_out.name))
         img, weight = driz.image, driz.weight
         if s.fill_holes:
             img = drizzle_mod.fill_holes(img)
@@ -260,12 +261,12 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
         if s.downsample == 0.5:
             master = _downsample(master)
     write_fits(output, master, hdr, bits=s.output_bits)
-    log(f"輸出 {output}（{master.shape[-1]}×{master.shape[-2]}）")
+    log(Msg("msg.output", path=output, w=master.shape[-1], h=master.shape[-2]))
     qc["crop"] = crop
     recipe = _write_recipe(output, project, frames, calibration, s, qc, warnings)
     for w in warnings:
         log(f"⚠ {w}")
-    log(f"完成，耗時 {time.time() - t0:.0f} 秒")
+    log(Msg("msg.done", seconds=time.time() - t0))
     return Result(output=output, recipe=recipe, project=project, warnings=warnings, qc=qc)
 
 
@@ -274,7 +275,7 @@ def _choose_reference(frames: list[Frame], name: str | None, warnings: list[str]
         hit = next((f for f in frames if f.name == name), None)
         if hit:
             return hit
-        warnings.append(f"指定的參考 frame {name} 不可用，改用自動選擇")
+        warnings.append(Msg("msg.bad_reference", name=name))
     good = [f for f in frames if np.isfinite(f.stars.fwhm)] or frames
 
     def rank(vals, reverse=False):
@@ -330,7 +331,7 @@ def _jobs(frames: list[Frame]) -> list[FrameJob]:
 
 def _integrate(frames, bayer, shape, s: Settings, cache: Path, be, workers: int, log, progress=None):
     n = len(frames)
-    log(f"整合 {n} 張（{s.rejection}，low {s.low}σ / high {s.high}σ）")
+    log(Msg("msg.integrate_start", n=n, method=s.rejection, low=s.low, high=s.high))
     map_paths = None
     if s.keep_rejection_maps or s.drizzle:
         rdir = cache / "rejection"
@@ -349,19 +350,18 @@ def _run_drizzle(frames, bayer, shape, s: Settings, map_paths, qc, warnings, cac
     """Stage 7。條件不理想時只提醒、照樣執行（APU 的原則）。"""
     n = len(frames)
     if not qc["drizzle_suitable"]:
-        warnings.append(f"Drizzle 在張數夠多（建議 20 張以上）且有 dither 時效果最好；目前 {n} 張、"
-                        f"dither 範圍 {qc['dither_spread_px']} px，結果可能出現格紋或空洞")
+        warnings.append(Msg("msg.drizzle_few", n=n, dither=qc["dither_spread_px"]))
     if s.drizzle >= 2 and qc["fwhm_px"] and qc["fwhm_px"]["median"] > 3.0 * (2 if bayer else 1):
-        warnings.append(f"星點 FWHM {qc['fwhm_px']['median']:.1f} px 已經取樣充足，{s.drizzle}× drizzle 能增加的細節有限")
-    log(f"{'CFA ' if bayer else ''}Drizzle {s.drizzle}×，pixfrac {s.pixfrac}，{n} 張")
+        warnings.append(Msg("msg.drizzle_oversampled", fwhm=qc["fwhm_px"]["median"], scale=s.drizzle))
+    log(Msg("msg.drizzle_start", cfa="CFA " if bayer else "", scale=s.drizzle, pixfrac=s.pixfrac, n=n))
     spec = DrizzleSpec(bayer, shape, s.drizzle, s.pixfrac, [p for p in map_paths] if map_paths[0] else None)
     res = drizzle_mod.drizzle(be, _jobs(frames), spec, cache, workers, s.memory_mb, log, progress)
     qc["drizzle"] = {"scale": s.drizzle, "pixfrac": s.pixfrac,
                      "holes_fraction": [round(v, 5) for v in res.holes]}
     worst = max(res.holes)
     if worst > 0.01:
-        warnings.append(f"Drizzle 輸出有 {worst:.1%} 的像素沒有資料"
-                        f"{'（已用鄰近像素補上）' if s.fill_holes else ''}；可以提高 pixfrac 或增加張數")
+        warnings.append(Msg("msg.drizzle_holes", fraction=worst,
+                            filled=Msg("msg.drizzle_holes_filled") if s.fill_holes else ""))
     return res
 
 

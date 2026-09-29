@@ -8,14 +8,17 @@ from pathlib import Path
 import numpy as np
 
 from .calibration import Masters, calibrate
+from .i18n import Msg, get_language, set_language
 from .imageio import load_image
 from .stars import detect
 
 _W: dict = {}
 
 
-def _init(masters: Masters, bayer: str | None) -> None:
+def _init(masters: Masters, bayer: str | None, lang: str | None = None) -> None:
     _W["masters"], _W["bayer"] = masters, bayer
+    if lang:
+        set_language(lang)  # 子行程的錯誤訊息用跟主行程相同的語言
 
 
 def _one(task: tuple[str, str]):
@@ -45,7 +48,7 @@ def prepare(tasks: list[tuple[str, str]], masters: Masters, bayer: str | None, w
         pool = None
     else:
         pool = ProcessPoolExecutor(max_workers=min(workers, len(tasks)), initializer=_init,
-                                   initargs=(masters, bayer))
+                                   initargs=(masters, bayer, get_language()))
         it = pool.map(_one, tasks)
     try:
         for i, (_dst, stars, err) in enumerate(it):
@@ -54,7 +57,7 @@ def prepare(tasks: list[tuple[str, str]], masters: Masters, bayer: str | None, w
             if progress:
                 progress(done, len(tasks))
             if done % 10 == 0 or done == len(tasks):
-                log(f"校正與找星 {done}/{len(tasks)}")
+                log(Msg("msg.prepare_progress", done=done, total=len(tasks)))
     finally:
         if pool is not None:
             pool.shutdown(cancel_futures=True)

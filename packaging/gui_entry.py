@@ -3,16 +3,16 @@
 multiprocessing.freeze_support() 一定要最先呼叫：打包後校正、整合、drizzle 的子行程跑的也是這個 exe，
 少了它每個子行程都會再開一個視窗。
 
---smoke-test <Light 資料夾> <結果檔>：確認打包好的 exe 能完整疊圖（含多行程、CFA Drizzle、預覽、
-相機 RAW 函式庫），build_exe.py 打包完會自動跑。這台電腦有 NVIDIA GPU 時再用 GPU 跑一次；
-沒有的話至少確認 CuPy 有打包進來（偵測失敗的原因不能是找不到模組）。
+--smoke-test <Light 資料夾> <結果檔> [--expect-gpu]：確認打包好的程式能完整疊圖（含多行程、CFA Drizzle、
+預覽、相機 RAW 函式庫），build_exe.py 打包完會自動跑。這台電腦有 NVIDIA GPU 時再用 GPU 跑一次；
+有包 GPU（--expect-gpu，Windows）但這台沒有顯示卡時，至少確認 CuPy 有打包進來（偵測失敗的原因不能是找不到模組）。
 """
 
 import multiprocessing
 import sys
 
 
-def smoke_test(folder: str, out: str) -> int:
+def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
     import traceback
     from pathlib import Path
 
@@ -28,7 +28,7 @@ def smoke_test(folder: str, out: str) -> int:
         assert rawpy.libraw_version
         lines = []
         has_gpu = backend.select("auto").gpu
-        if not has_gpu:
+        if not has_gpu and expect_gpu:
             # 沒有 GPU 的電腦：CuPy 要能載入，只是找不到顯示卡或驅動
             assert backend.last_error and "ModuleNotFound" not in backend.last_error                 and "ImportError" not in backend.last_error, f"CuPy 沒有打包好：{backend.last_error}"
             lines.append(f"gpu: none ({backend.last_error})")
@@ -49,7 +49,7 @@ def smoke_test(folder: str, out: str) -> int:
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     if len(sys.argv) >= 4 and sys.argv[1] == "--smoke-test":
-        sys.exit(smoke_test(sys.argv[2], sys.argv[3]))
+        sys.exit(smoke_test(sys.argv[2], sys.argv[3], "--expect-gpu" in sys.argv[4:]))
     from apu_photons.gui import main
 
     sys.exit(main())

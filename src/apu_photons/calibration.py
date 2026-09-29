@@ -11,6 +11,7 @@ from astropy.io import fits
 from scipy.ndimage import median_filter, uniform_filter
 
 from .combine import clip_combine
+from .i18n import Msg
 from .imageio import cfa_masks, load_image, write_fits
 
 ALGO_VERSION = "calib-1"
@@ -43,7 +44,7 @@ def _combine_files(paths: list[Path], rows_per_band: int = 256, preprocess=None)
         for i, p in enumerate(paths):
             data = first if i == 0 else load_image(p)[0]
             if data.shape != (h, w):
-                raise ValueError(f"{p.name}: 尺寸 {data.shape} 與 {paths[0].name} {(h, w)} 不同")
+                raise ValueError(Msg("msg.size_mismatch", name=p.name, shape=data.shape, first=paths[0].name, first_shape=(h, w)))
             tmp[i] = preprocess(data) if preprocess else data
         out = np.empty((h, w), np.float32)
         for r in range(0, h, rows_per_band):
@@ -96,9 +97,9 @@ def build_masters(cal, bayer: str | None, cache: Path, warnings: list[str], log)
         key = _cache_key(kind, paths, extra or {})
         path = mdir / f"master_{kind}_{key}.fits"
         if path.is_file():
-            log(f"master {kind}: 使用快取 {path.name}")
+            log(Msg("msg.master_cached", kind=kind, name=path.name))
             return fits.getdata(path).astype(np.float32)
-        log(f"master {kind}: 整合 {len(paths)} 張")
+        log(Msg("msg.master_combine", kind=kind, n=len(paths)))
         data = _combine_files(paths, preprocess=preprocess)
         hdr = fits.Header()
         hdr["IMAGETYP"] = f"MASTER {kind.upper()}"
@@ -114,15 +115,15 @@ def build_masters(cal, bayer: str | None, cache: Path, warnings: list[str], log)
     if cal.flat:
         sub = flat_dark if flat_dark is not None else bias
         if sub is None:
-            warnings.append("Flat 沒有 flat-dark 或 bias 可以扣，flat 會含有偏壓，校正結果可能偏差")
+            warnings.append(Msg("msg.flat_no_sub"))
         flat_raw = master("flat", cal.flat, {"sub": None if sub is None else float(np.mean(sub))},
                           preprocess=(lambda d: d - sub) if sub is not None else None)
         flat = normalize_flat(flat_raw, bayer)
 
     if dark is None and bias is None:
-        warnings.append("沒有 dark 也沒有 bias，這次不扣暗電流與偏壓")
+        warnings.append(Msg("msg.no_dark_bias"))
     if flat is None:
-        warnings.append("沒有 flat，這次不做平場校正（暗角與灰塵不會被修正）")
+        warnings.append(Msg("msg.no_flat"))
 
     bad = None
     if dark is not None:
@@ -132,7 +133,7 @@ def build_masters(cal, bayer: str | None, cache: Path, warnings: list[str], log)
         cold = flat < COLD_FLAT
         bad = cold if bad is None else (bad | cold)
     if bad is not None:
-        log(f"壞像素（來自 master dark / flat）：{int(bad.sum())} 個")
+        log(Msg("msg.bad_pixels", n=int(bad.sum())))
     return Masters(bias=bias, dark=dark, flat=flat, bad=bad)
 
 

@@ -19,6 +19,7 @@ import numpy as np
 
 from .backend import CPU, Backend
 from .combine import HIGH, LOW
+from .i18n import Msg
 from .integrate import FrameJob
 
 ALGO_VERSION = "drizzle-1"
@@ -173,7 +174,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
         budget = min(memory_mb * 2 ** 20 * 4, int((be.memory_bytes() or 0) * 0.4))
         rows = int(max(16, min(ho, budget // per_out_row)))
         strips = [(q, min(ho, q + rows)) for q in range(0, ho, rows)]
-        log(f"Drizzle（GPU {be.device}），每條 {rows} 列、共 {len(strips)} 條")
+        log(Msg("msg.drizzle_gpu", device=be.device, rows=rows, strips=len(strips)))
         cals = [np.load(j.cal_path, mmap_mode="r") for j in jobs]
         rmaps = [np.load(p, mmap_mode="r") for p in spec.map_paths] if spec.map_paths else None
         for i, (q0, q1) in enumerate(strips, 1):
@@ -181,7 +182,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
             _store(img_path, wgt_path, q0, be.to_numpy(acc), be.to_numpy(wsum))
             del acc, wsum
             be.free()
-            log(f"Drizzle {q1}/{ho} 列")
+            log(Msg("msg.drizzle_rows", done=q1, total=ho))
             if progress:
                 progress(q1, ho)
     else:
@@ -189,7 +190,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
         # 條數至少是行程數的幾倍，工作量才平均
         rows = min(rows, max(16, -(-ho // (max(1, workers) * 3))))
         strips = [(q, min(ho, q + rows)) for q in range(0, ho, rows)]
-        log(f"Drizzle（CPU {workers} 個行程），每條 {rows} 列、共 {len(strips)} 條")
+        log(Msg("msg.drizzle_cpu", workers=workers, rows=rows, strips=len(strips)))
         if workers <= 1:
             _init_worker(jobs, spec, img_path, wgt_path)
             results, pool = map(_cpu_strip, strips), None
@@ -201,7 +202,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
             done = 0
             for n in results:
                 done += n
-                log(f"Drizzle {done}/{ho} 列")
+                log(Msg("msg.drizzle_rows", done=done, total=ho))
                 if progress:
                     progress(done, ho)
         finally:

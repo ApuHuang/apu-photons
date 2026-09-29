@@ -32,7 +32,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 | 8 輸出 | 裁切共同區域、Downsample 0.5×、32-bit / 16-bit FITS、`recipe.json`、log |
 | QC | 剔除原因統計、FWHM 分布、dither 分析與 drizzle 適用性、剔除像素特別多的 frame（衛星、飛機、雲） |
 
-**尚未完成**：local normalization、Mac 版打包、引擎警告的英文翻譯。
+**尚未完成**：local normalization。
 
 ### 效能
 
@@ -61,12 +61,12 @@ py -3.12 -m venv .venv
 .venv\Scripts\apu-photons stack Light夜1 Light夜2 --dark Dark --flat Flat --flat-dark FlatDark -o out\master.fits
 ```
 
-常用選項：`--preview 20`（抽樣試跑）、`--downsample`、`--rejection sigma`、`--reference 檔名`、`--memory 4096`、`--bits 16`。
+常用選項：`--lang en`（英文）、`--preview 20`（抽樣試跑）、`--downsample`、`--rejection sigma`、`--reference 檔名`、`--memory 4096`、`--bits 16`。
 `apu-photons stack -h` 看全部。
 
 校正後的中介檔、master 與剔除遮罩放在輸出旁的 `.photons_cache/`，重跑會沿用；可以直接刪掉。
 
-## 打包（Windows）
+## 打包
 
 ```sh
 .venv\Scripts\pip install -e ".[exe,gpu]" matplotlib   # matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
@@ -78,6 +78,9 @@ py -3.12 -m venv .venv
 
 打包完會自動用合成星場跑一次打包好的 exe（多行程、CFA Drizzle 2×、預覽；打包的電腦有 GPU 時再用 GPU 跑一次），
 失敗就不產生 zip。圖示由 `packaging\make_assets.py` 產生。
+
+Mac 版（Apple Silicon 與 Intel）由 GitHub Actions 的雲端 Mac 打包（`.github/workflows/build-macos.yml`）：
+發布 Release 時自動執行並把 zip 附到同一個 Release，也可以在 Actions 頁面手動執行。Mac 沒有 CUDA，只用 CPU 多行程。
 
 ## 測試
 

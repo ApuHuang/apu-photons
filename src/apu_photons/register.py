@@ -10,6 +10,8 @@ from itertools import combinations
 import numpy as np
 from scipy.spatial import cKDTree
 
+from .i18n import Msg
+
 ALGO_VERSION = "tri-ransac-1"
 TRI_STARS = 25
 INV_TOL = 0.005
@@ -64,12 +66,12 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
              ) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
     """src_xy、ref_xy 依亮度由亮到暗排序。回傳（3×3 變換, 殘差 RMS 像素, 配對的 src 索引, 對應的 ref 索引）。"""
     if len(src_xy) < 4 or len(ref_xy) < 4:
-        raise RegistrationError("星點太少")
+        raise RegistrationError(Msg("msg.reg.few_stars"))
     rng = rng or np.random.default_rng(0)
     s_inv, s_v = _triangles(src_xy)
     r_inv, r_v = _triangles(ref_xy)
     if not len(s_inv) or not len(r_inv):
-        raise RegistrationError("星點太少，組不出三角形")
+        raise RegistrationError(Msg("msg.reg.no_triangles"))
     tree = cKDTree(r_inv)
     votes = np.zeros((min(len(src_xy), TRI_STARS), min(len(ref_xy), TRI_STARS)), int)
     for si, hits in enumerate(tree.query_ball_point(s_inv, INV_TOL)):
@@ -77,7 +79,7 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
             np.add.at(votes, (s_v[si], r_v[ri]), 1)
     pairs = [(i, int(votes[i].argmax())) for i in range(votes.shape[0]) if votes[i].max() >= 2]
     if len(pairs) < 3:
-        raise RegistrationError("找不到對應的星點三角形")
+        raise RegistrationError(Msg("msg.reg.no_match"))
     pairs = np.asarray(pairs)
     a, b = src_xy[pairs[:, 0]], ref_xy[pairs[:, 1]]
 
@@ -92,7 +94,7 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
         if n > best_n:
             best, best_n = m, n
     if best is None or best_n < 3:
-        raise RegistrationError("RANSAC 找不到一致的變換")
+        raise RegistrationError(Msg("msg.reg.ransac"))
 
     # 用全部星點精修：最近鄰配對 → 重新擬合，重複幾次
     ref_tree = cKDTree(ref_xy)
@@ -101,11 +103,11 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
         dist, j = ref_tree.query(apply(m, src_xy))
         ok = dist < MATCH_RADIUS
         if ok.sum() < MIN_INLIERS:
-            raise RegistrationError(f"配對到的星點只有 {int(ok.sum())} 顆")
+            raise RegistrationError(Msg("msg.reg.few_matches", n=int(ok.sum())))
         m = similarity(src_xy[ok], ref_xy[j[ok]])
     dist, j = ref_tree.query(apply(m, src_xy))
     ok = dist < MATCH_RADIUS
     rms = float(np.sqrt(np.mean(dist[ok] ** 2)))
     if rms > MAX_RESIDUAL:
-        raise RegistrationError(f"對齊殘差 {rms:.2f} px 過大")
+        raise RegistrationError(Msg("msg.reg.residual", rms=rms))
     return m, rms, np.flatnonzero(ok), j[ok]
