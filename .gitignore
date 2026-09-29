@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.photons_cache/
+samples/
+output/
+build/
+dist/
+*.fit
+*.fits
+*.fts
