@@ -1,12 +1,14 @@
 """打包成可直接執行的程式，再壓成 zip 方便分享（做法與 APU Pick 相同）。
 
-    pip install -e .[exe]
-    python packaging/build_exe.py          # 標準版：CPU 多行程
-    python packaging/build_exe.py --gpu    # GPU 版：另外包進 CuPy 與 CUDA runtime / NVRTC（需要 NVIDIA 驅動）
+    pip install -e .[exe,gpu]
+    python packaging/build_exe.py
 
-- Windows：dist/APUPhotons/APUPhotons.exe → dist/APUPhotons-<版本>-win64.zip（GPU 版為 -win64-gpu.zip）
+- Windows：dist/APUPhotons/APUPhotons.exe → dist/APUPhotons-<版本>-win64.zip
 
-打包完會用合成星場實際跑一次打包好的程式（多行程、CFA Drizzle 2×、預覽；GPU 版再用 GPU 跑一次），
+只有一個版本：一律包進 CuPy 與 CUDA runtime / NVRTC，執行時自動偵測，
+有 NVIDIA 顯示卡就用 GPU，沒有就用 CPU 多行程。Mac 沒有 CUDA，不包 GPU。
+
+打包完會用合成星場實際跑一次打包好的程式（多行程、CFA Drizzle 2×、預覽；這台有 GPU 時再用 GPU 跑一次），
 都正常才算成功。
 """
 
@@ -37,9 +39,8 @@ GPU_CUDA_LIBS = ["cuda_runtime", "cuda_nvrtc"]
 UNUSED_CUDA = ("cublas", "cufft", "curand", "cusolver", "cusparse", "nvjitlink")
 
 
-def platform_tag(gpu: bool) -> str:
-    tag = "win64" if sys.platform == "win32" else f"{sys.platform}-{platform.machine()}"
-    return tag + ("-gpu" if gpu else "")
+def platform_tag() -> str:
+    return "win64" if sys.platform == "win32" else f"{sys.platform}-{platform.machine()}"
 
 
 def build(gpu: bool) -> Path:
@@ -62,7 +63,11 @@ def build(gpu: bool) -> Path:
         "--specpath", str(BUILD),
     ]
     if gpu:
-        import nvidia
+        try:
+            import cupy  # noqa: F401
+            import nvidia
+        except ImportError:
+            raise SystemExit("打包環境沒有 CuPy：先執行 pip install -e .[gpu]") from None
 
         args += ["--collect-all", "cupy", "--collect-all", "cupyx", "--collect-all", "cupy_backends",
                  "--collect-all", "cuda_pathfinder", "--hidden-import", "graphlib", "--copy-metadata", "cupy-cuda12x"]
@@ -95,14 +100,14 @@ def prune_cuda(bundle: Path) -> None:
     print(f"移除用不到的 CUDA 函式庫 {removed / 2**20:.0f} MB")
 
 
-def smoke_test(exe: Path, gpu: bool) -> None:
+def smoke_test(exe: Path) -> None:
     from tests.test_drizzle import _dithered
     from tests.test_pipeline import _make
 
     with tempfile.TemporaryDirectory() as tmp:
         light, _cal = _make(Path(tmp), bayer="RGGB", with_cal=False, shifts=_dithered(10))
         out = Path(tmp) / "smoke.txt"
-        cmd = [str(exe), "--smoke-test", str(light), str(out)] + (["gpu"] if gpu else [])
+        cmd = [str(exe), "--smoke-test", str(light), str(out)]
         proc = subprocess.run(cmd, timeout=900)
         text = out.read_text(encoding="utf-8") if out.exists() else "(沒有輸出)"
         if proc.returncode != 0 or not text.startswith("ok ") or "frames=10" not in text:
@@ -110,8 +115,8 @@ def smoke_test(exe: Path, gpu: bool) -> None:
         print(f"打包好的程式測試通過：{text.strip()}")
 
 
-def archive(gpu: bool) -> tuple[Path, Path]:
-    base = DIST / f"{NAME}-{__version__}-{platform_tag(gpu)}"
+def archive() -> tuple[Path, Path]:
+    base = DIST / f"{NAME}-{__version__}-{platform_tag()}"
     return DIST / NAME, Path(shutil.make_archive(str(base), "zip", root_dir=DIST, base_dir=NAME))
 
 
@@ -120,10 +125,9 @@ def folder_size(path: Path) -> int:
 
 
 def main() -> None:
-    gpu = "--gpu" in sys.argv
-    exe = build(gpu)
-    smoke_test(exe, gpu)
-    bundle, zip_path = archive(gpu)
+    exe = build(gpu=not IS_MAC)
+    smoke_test(exe)
+    bundle, zip_path = archive()
     print(f"\n程式：{bundle}（{folder_size(bundle) / 2**20:.0f} MB）")
     print(f"分享用：{zip_path}（{zip_path.stat().st_size / 2**20:.0f} MB）")
 

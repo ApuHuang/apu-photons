@@ -59,6 +59,7 @@ def _try_cuda() -> Backend | None:
             import cupyx.scipy.ndimage as cndi
 
         if cp.cuda.runtime.getDeviceCount() < 1:
+            last_error = "沒有 NVIDIA GPU"
             return None
         props = cp.cuda.runtime.getDeviceProperties(0)
         cp.asarray([1.0]).sum()  # 真的能跑才算

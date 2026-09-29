@@ -37,7 +37,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 ### 效能
 
 - 校正與找星：多行程平行（預設核心數 − 1，`--workers`）
-- 整合與 Drizzle：有 NVIDIA 顯示卡且裝了 CuPy（`pip install -e ".[gpu]"`）就自動用 GPU；否則用 CPU 多行程。`--gpu cpu` 可強制用 CPU
+- 整合與 Drizzle：有 NVIDIA 顯示卡就自動用 GPU（原始碼執行時需要 `pip install -e ".[gpu]"`；打包版已內含）；否則用 CPU 多行程。`--gpu cpu` 可強制用 CPU
 - GPU 與 CPU 結果一致（只有極少數剛好落在剔除門檻上的像素因浮點誤差判斷不同）
 
 實測（Sony ARW 6024×4024，7 張，CFA Drizzle 2×，Ryzen 5 5600X + RTX 3090）：
@@ -69,14 +69,15 @@ py -3.12 -m venv .venv
 ## 打包（Windows）
 
 ```sh
-.venv\Scripts\pip install -e ".[exe]" matplotlib   # matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
-.venv\Scripts\python packaging\build_exe.py          # 標準版 → dist\APUPhotons-<版本>-win64.zip（約 74 MB）
-.venv\Scripts\python packaging\build_exe.py --gpu    # GPU 版 → dist\APUPhotons-<版本>-win64-gpu.zip（約 243 MB）
+.venv\Scripts\pip install -e ".[exe,gpu]" matplotlib   # matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
+.venv\Scripts\python packaging\build_exe.py            # → dist\APUPhotons-<版本>-win64.zip（約 243 MB）
 ```
 
-打包完會自動用合成星場跑一次打包好的 exe（多行程、CFA Drizzle 2×、預覽；GPU 版再用 GPU 跑一次），失敗就不產生 zip。
-GPU 版只包 CUDA runtime 與 NVRTC；cuBLAS、cuFFT 等用不到的函式庫（約 1.9 GB）會自動移除。
-使用者需要 NVIDIA 顯示卡與新版驅動，不需要另外安裝 CUDA。圖示由 `packaging\make_assets.py` 產生。
+只有一個版本：執行時自動偵測，有 NVIDIA 顯示卡（與新版驅動）就用 GPU，沒有就用 CPU 多行程，使用者不用選、也不用另外安裝 CUDA。
+包進去的只有 CUDA runtime 與 NVRTC；cuBLAS、cuFFT 等用不到的函式庫（約 1.9 GB）會自動移除。
+
+打包完會自動用合成星場跑一次打包好的 exe（多行程、CFA Drizzle 2×、預覽；打包的電腦有 GPU 時再用 GPU 跑一次），
+失敗就不產生 zip。圖示由 `packaging\make_assets.py` 產生。
 
 ## 測試
 
