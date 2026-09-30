@@ -82,6 +82,9 @@ py -3.12 -m venv .venv
 Mac 版（Apple Silicon 與 Intel）由 GitHub Actions 的雲端 Mac 打包（`.github/workflows/build-macos.yml`）：
 發布 Release 時自動執行並把 zip 附到同一個 Release，也可以在 Actions 頁面手動執行。Mac 沒有 CUDA，只用 CPU 多行程。
 
+Windows 版也可以由雲端 Windows 打包（`.github/workflows/build-windows.yml`），觸發方式相同。
+雲端機沒有 NVIDIA 顯示卡，打包後的測試只跑 CPU 並確認 CuPy 有包進去；GPU 疊圖要在有顯示卡的電腦上實測。
+
 ## 測試
 
 ```sh
