@@ -3,6 +3,7 @@ name = "apu-photons"
 dynamic = ["version"]
 description = "APU Photons (Astrophotography Photons Utility)：天文攝影校正、對齊、疊圖"
 requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = ["astropy>=6.0", "numpy>=1.26", "photutils>=1.12", "scipy>=1.12", "rawpy>=0.25", "pillow>=10"]
 
 [project.optional-dependencies]

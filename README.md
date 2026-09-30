@@ -89,3 +89,7 @@ Mac 版（Apple Silicon 與 Intel）由 GitHub Actions 的雲端 Mac 打包（`.
 ```
 
 用合成星場驗證：已知位移／旋轉的對齊精度、中天翻轉、衛星軌跡剔除、熱像素與暗角修正、APU Pick sidecar 篩選、Preview 與 Downsample。
+
+## 授權
+
+[MIT License](LICENSE)
