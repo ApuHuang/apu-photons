@@ -165,18 +165,21 @@ class Switch(tk.Canvas):
         super().__init__(master, width=self.w, height=self.h, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
         self.var = variable
         self.enabled = True
+        self.forced_off = False
         self.bind("<Button-1>", lambda _e: self.enabled and variable.set(not variable.get()))
         _trace(self, variable, self._draw)
         self._draw()
 
-    def set_enabled(self, enabled: bool) -> None:
+    def set_enabled(self, enabled: bool, forced_off: bool = False) -> None:
+        """forced_off：功能用不了（例如沒有 GPU）時畫成關，但保留使用者原本的設定。"""
         self.enabled = enabled
+        self.forced_off = forced_off and not enabled
         self.configure(cursor="hand2" if enabled else "arrow")
         self._draw()
 
     def _draw(self) -> None:
         self.delete("all")
-        on, w, h = bool(self.var.get()), self.w, self.h
+        on, w, h = bool(self.var.get()) and not self.forced_off, self.w, self.h
         fill = (Darkroom.prominent if on else Darkroom.control) if self.enabled else (
             "#1d3550" if on else Darkroom.group_header)
         self.create_oval(0, 0, h - 1, h - 1, fill=fill, outline=fill)
@@ -323,8 +326,8 @@ class ParameterToggle(tk.Frame):
         self.switch.pack(side="right")
         self.label.bind("<Button-1>", lambda _e: self.switch.enabled and variable.set(not variable.get()))
 
-    def set_enabled(self, enabled: bool) -> None:
-        self.switch.set_enabled(enabled)
+    def set_enabled(self, enabled: bool, forced_off: bool = False) -> None:
+        self.switch.set_enabled(enabled, forced_off)
         self.label.configure(fg=Darkroom.label if enabled else "#6b6b6b")
 
 
@@ -779,8 +782,13 @@ class App:
         first, last = self.panel_canvas.yview()
         if first <= 0 and last >= 1:
             return
-        delta = -1 if event.delta > 0 else 1
-        self.panel_canvas.yview_scroll(delta * (1 if IS_MAC else 3), "units")
+        # macOS 的 delta 是 ±1 起跳、隨觸控板速度變大的數字，要照大小捲（同 Pick）；Windows 一格是 120
+        if IS_MAC:
+            steps = -event.delta
+        else:
+            steps = -3 * (int(event.delta / 120) if abs(event.delta) >= 120 else (1 if event.delta > 0 else -1))
+        if steps:
+            self.panel_canvas.yview_scroll(steps, "units")
 
     # ------------------------------------------------------------------ 說明氣泡
 
@@ -956,7 +964,7 @@ class App:
             self.gpu_toggle.set_enabled(True)
         else:
             self.gpu_label.configure(text=tr("gui.gpu.none"))
-            self.gpu_toggle.set_enabled(False)
+            self.gpu_toggle.set_enabled(False, forced_off=True)
 
     # ------------------------------------------------------------------ 執行
 
@@ -1226,6 +1234,9 @@ class App:
             if not messagebox.askyesno(APP_NAME, tr("gui.close.confirm"), parent=self.root):
                 return
             self.cancel.set()
+            # 行程要等 worker 做完手上這一段才會結束；先把視窗收起來，不然 Mac 上視窗會停在畫面上十幾秒
+            self.root.withdraw()
+            self.root.update()
         self.close()
         self.root.destroy()
 

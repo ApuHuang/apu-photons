@@ -40,6 +40,15 @@ def _make(tmp_path, bayer=None, trail_index=3, with_cal=True, shifts=SHIFTS):
     return light, cal
 
 
+@pytest.mark.parametrize("bayer", [None, "RGGB"])
+def test_fwhm_matches_truth(bayer):
+    # CFA 在 super-pixel 上量，會稍微偏大
+    tol = 0.1 if bayer is None else 0.15
+    for fwhm in (2.5, 4.0, 6.0):
+        got = detect(synth.render(0.3, 0.6, 0, seed=5, fwhm=fwhm, bayer=bayer), bayer).fwhm
+        assert abs(got - fwhm) < tol * fwhm, (fwhm, got)
+
+
 def test_register_recovers_transform():
     a = synth.render(0, 0, 0, seed=1)
     b = synth.render(4.3, -2.2, 1.0, seed=2)
@@ -81,7 +90,9 @@ def test_bayer_offset_and_night():
 def test_full_stack(tmp_path, bayer):
     light, cal = _make(tmp_path, bayer=bayer)
     out = tmp_path / "out" / "master.fits"
-    res = run([light], cal, out, Settings(crop_common=False), echo=None)
+    # 固定參考 frame：合成星場每張 FWHM 幾乎一樣，自動選可能選到有軌跡的那張，
+    # 參考 frame 不內插、軌跡較細，剔除比例就不到其他張的 2 倍
+    res = run([light], cal, out, Settings(crop_common=False, reference="L_000.fits"), echo=None)
     data = fits.getdata(out)
     assert data.shape == ((3, synth.H, synth.W) if bayer else (synth.H, synth.W))
     assert res.qc["frames_integrated"] == len(SHIFTS)

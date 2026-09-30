@@ -16,7 +16,7 @@ DETECT_SIGMA = 5.0
 DETECT_FWHM = 3.0
 MAX_STARS = 400
 SHAPE_STARS = 60
-CUTOUT = 7
+CUTOUT = 12
 
 
 def superpixel(data: np.ndarray) -> np.ndarray:
@@ -27,18 +27,36 @@ def superpixel(data: np.ndarray) -> np.ndarray:
 
 
 def _moment_fwhm(img: np.ndarray, x: float, y: float) -> float | None:
+    """高斯加權的自適應二階矩：窗寬跟著星點收斂，雜訊與鄰近星不會把 FWHM 撐大。
+
+    高斯星點 σ 配上寬 s 的高斯窗，量到的每軸加權變異數 m = σ²s²/(σ²+s²)，可反解 σ² = m·s²/(s²−m)。
+    """
     xi, yi = int(round(x)), int(round(y))
     if yi < CUTOUT or xi < CUTOUT or yi + CUTOUT >= img.shape[0] or xi + CUTOUT >= img.shape[1]:
         return None
-    c = img[yi - CUTOUT:yi + CUTOUT + 1, xi - CUTOUT:xi + CUTOUT + 1]
-    c = np.clip(c - np.median(c), 0, None)
-    tot = c.sum()
-    if tot <= 0:
-        return None
+    c = img[yi - CUTOUT:yi + CUTOUT + 1, xi - CUTOUT:xi + CUTOUT + 1].astype(np.float64)
+    edge = np.concatenate([c[0], c[-1], c[1:-1, 0], c[1:-1, -1]])
+    c = c - np.median(edge)
     yy, xx = np.indices(c.shape)
-    cx, cy = (c * xx).sum() / tot, (c * yy).sum() / tot
-    var = ((c * ((xx - cx) ** 2 + (yy - cy) ** 2)).sum() / tot) / 2.0
-    return float(2.3548 * np.sqrt(var)) if var > 0 else None
+    cx, cy = CUTOUT + (x - xi), CUTOUT + (y - yi)
+    sigma = DETECT_FWHM / 2.3548
+    for _ in range(30):
+        s2 = 2.0 * sigma ** 2  # 窗寬取星點 σ 的 √2 倍，m 與 σ 同量級，反解最穩
+        r2 = (xx - cx) ** 2 + (yy - cy) ** 2
+        wc = c * np.exp(-r2 / (2.0 * s2))
+        tot = wc.sum()
+        if tot <= 0:
+            return None
+        cx, cy = (wc * xx).sum() / tot, (wc * yy).sum() / tot
+        m = ((wc * ((xx - cx) ** 2 + (yy - cy) ** 2)).sum() / tot) / 2.0
+        if not 0 < m < s2 or abs(cx - CUTOUT) > 3 or abs(cy - CUTOUT) > 3:
+            return None
+        new = float(np.sqrt(m * s2 / (s2 - m)))
+        if abs(new - sigma) < 1e-3 * sigma:
+            sigma = new
+            break
+        sigma = new
+    return 2.3548 * sigma if 0.3 < sigma < CUTOUT / 2.5 else None
 
 
 def _finder(noise: float) -> DAOStarFinder:

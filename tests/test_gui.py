@@ -110,3 +110,31 @@ def test_trial_and_cancel(app, tmp_path):
     _wait(app)
     assert app.result is None
     assert app.status_var.get() in ("已停止", "Stopped")
+
+
+def test_gpu_switch_shows_off_without_gpu(app):
+    app.gpu_var.set(True)
+    app._gpu_checked, app.gpu_name = True, None
+    app._update_gpu_view()
+    sw = app.gpu_toggle.switch
+    assert not sw.enabled and sw.forced_off
+    assert app.gpu_var.get()  # 設定保留，換到有 GPU 的電腦照樣會用
+    # 2× 強制 drizzle：停用但真的是開著，照實畫成開
+    app.scale_var.set("2")
+    assert not app.drizzle_toggle.switch.enabled and not app.drizzle_toggle.switch.forced_off
+
+
+def test_panel_scroll_follows_delta(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.panel_canvas, "yview", lambda *a: (0.2, 0.6) if not a else None)
+    monkeypatch.setattr(app.panel_canvas, "yview_scroll", lambda n, what: calls.append(n))
+    event = type("E", (), {"widget": app.panel_canvas})()
+    monkeypatch.setattr(gui, "IS_MAC", True)
+    for delta in (1, -1, 6):
+        event.delta = delta
+        app._scroll_panel(event)
+    monkeypatch.setattr(gui, "IS_MAC", False)
+    for delta in (120, -240):
+        event.delta = delta
+        app._scroll_panel(event)
+    assert calls == [-1, 1, -6, -3, 6]
