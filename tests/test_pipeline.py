@@ -224,3 +224,27 @@ def test_raw_is_marked_top_down(tmp_path, monkeypatch):
     data, hdr = load_image(path)
     assert data.shape == (4, 6) and hdr["BAYERPAT"] == "RGGB"
     assert row_order(hdr) == "TOP-DOWN"
+
+
+def test_headless_defaults_without_calibration(tmp_path):
+    """一鍵路線的用法：不開視窗、預設設定、沒有任何校正檔，從資料夾疊到成品；引擎不載入 tkinter。"""
+    import subprocess
+    import sys
+
+    light, _cal = _make(tmp_path, with_cal=False)
+    out = tmp_path / "out" / "master.fits"
+    code = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from apu_photons.engine import Settings, run\n"
+        "from apu_photons.model import Calibration\n"
+        f"res = run([Path({str(light)!r})], Calibration(), Path({str(out)!r}), Settings(), echo=None)\n"
+        "assert res.output.is_file(), res.output\n"
+        "assert 'tkinter' not in sys.modules\n"
+        "print(res.qc['frames_integrated'])\n"
+    )
+    script = tmp_path / "headless.py"  # 寫成檔案：用 stdin 餵的話多行程 spawn 找不到主程式
+    script.write_text("if __name__ == '__main__':\n" + "".join("    " + l + "\n" for l in code.splitlines()))
+    proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(len(SHIFTS))
