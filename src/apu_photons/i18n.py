@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-APP_NAME = "APU Photons"
+from .settings import APP_NAME  # noqa: F401  名稱只在 settings.py 定義一次（設定資料夾也用它）
 APP_SUBTITLE = "Astrophotography Photons Utility"
 
 LANGUAGES = {"zh": "繁體中文", "en": "English"}
