@@ -142,3 +142,85 @@ def test_preview_and_downsample(tmp_path):
     res = run([light], cal, tmp_path / "p.fits", Settings(preview=4, downsample=0.5, crop_common=False), echo=None)
     assert res.qc["frames_integrated"] == 4
     assert fits.getdata(res.output).shape == (synth.H // 2, synth.W // 2)
+
+
+def _read_like_processing(path):
+    """後製端的讀法：ROWORDER 不是 TOP-DOWN 就上下翻轉成由上往下。"""
+    with fits.open(path) as hdul:
+        data, hdr = hdul[0].data.astype(np.float32), hdul[0].header
+    data = data if data.ndim == 2 else data.mean(axis=0)
+    return data if str(hdr.get("ROWORDER", "")).upper() == "TOP-DOWN" else data[::-1]
+
+
+def _make_sloped(folder, order=None, n=5, odd=None):
+    """背景由第 0 列往下越來越亮，翻反了一看就知道。"""
+    ramp = np.linspace(0, 3000, synth.H, dtype=np.float32)[:, None]
+    for i, (tx, ty, rot) in enumerate(SHIFTS[:n]):
+        img = synth.render(tx, ty, rot, seed=200 + i) + ramp
+        extra = {"ROWORDER": order} if order else {}
+        if odd is not None and i == odd:
+            extra = {"ROWORDER": "TOP-DOWN" if order != "TOP-DOWN" else "BOTTOM-UP"}
+        synth.write(folder / f"L_{i:03d}.fits", img, EXPTIME=60.0, DATE_OBS=f"2026-09-20T14:{i:02d}:00", **extra)
+    return folder
+
+
+@pytest.mark.parametrize("order", [None, "TOP-DOWN", "BOTTOM-UP"])
+def test_output_roworder_follows_lights(tmp_path, order):
+    light = _make_sloped(tmp_path / "light", order)
+    res = run([light], Calibration(), tmp_path / "m.fits", Settings(crop_common=False, reference="L_000.fits"),
+              echo=None)
+    assert fits.getheader(res.output)["ROWORDER"] == (order or "BOTTOM-UP")
+    # 用後製端的讀法打開，方向要跟原始 light 一樣
+    master, ref = _read_like_processing(res.output), _read_like_processing(light / "L_000.fits")
+    prof_m, prof_r = master.mean(axis=1), ref.mean(axis=1)
+    assert np.corrcoef(prof_m, prof_r)[0, 1] > 0.9
+
+
+def test_roworder_mismatch_rejected(tmp_path):
+    light = _make_sloped(tmp_path / "light", None, n=5, odd=2)
+    res = run([light], Calibration(), tmp_path / "m.fits", Settings(crop_common=False), echo=None)
+    assert res.qc["frames_integrated"] == 4
+    assert any("ROWORDER" in str(w) for w in res.warnings)
+
+
+def test_preview_shows_top_down(tmp_path):
+    from apu_photons.preview import load_preview
+
+    data = np.zeros((40, 30), np.float32)
+    data[:10] = 1000.0  # 陣列的前 10 列
+    data += np.random.default_rng(0).normal(100, 5, data.shape).astype(np.float32)
+    for order, bright_top in (("TOP-DOWN", True), ("BOTTOM-UP", False)):
+        path = tmp_path / f"{order}.fits"
+        fits.PrimaryHDU(data, header=fits.Header({"ROWORDER": order})).writeto(path)
+        img = np.asarray(load_preview(path), np.float32)
+        assert (img[:10].mean() > img[-10:].mean()) == bright_top
+
+
+def test_raw_is_marked_top_down(tmp_path, monkeypatch):
+    """rawpy 的第 0 列是畫面最上面：讀進來就標 TOP-DOWN，輸出才會標對方向。"""
+    import sys
+    import types
+
+    from apu_photons.imageio import load_image, row_order
+
+    class FakeRaw:
+        raw_image_visible = np.full((4, 6), 1000, np.uint16)
+        black_level_per_channel = [64, 64, 64, 64]
+        raw_colors_visible = np.zeros((4, 6), int)
+        raw_pattern = np.array([[0, 1], [3, 2]])
+        color_desc = b"RGBG"
+        white_level = 16383
+        other = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setitem(sys.modules, "rawpy", types.SimpleNamespace(imread=lambda _p: FakeRaw()))
+    path = tmp_path / "x.arw"
+    path.write_bytes(b"")
+    data, hdr = load_image(path)
+    assert data.shape == (4, 6) and hdr["BAYERPAT"] == "RGGB"
+    assert row_order(hdr) == "TOP-DOWN"

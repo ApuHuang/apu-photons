@@ -22,7 +22,7 @@ from . import integrate as integrate_mod
 from .backend import default_workers
 from .calibration import ALGO_VERSION as CALIB_VERSION, build_masters
 from .drizzle import DrizzleSpec
-from .imageio import cfa_masks, write_fits
+from .imageio import cfa_masks, row_order, write_fits
 from .i18n import Msg
 from .ingest import ingest
 from .integrate import BandSpec, FrameJob
@@ -254,7 +254,10 @@ def _run(light_dirs, calibration, output, s, cache, log, warnings, t0, report) -
         hdr["PIXFRAC"] = s.pixfrac
         if "XPIXSZ" in hdr:
             hdr["XPIXSZ"] = float(hdr["XPIXSZ"]) / s.drizzle
-        write_fits(output.with_name(output.stem + "_weight" + output.suffix), weight)
+        whdr = fits.Header()
+        whdr["ROWORDER"] = hdr["ROWORDER"], hdr.comments["ROWORDER"]
+        whdr["DRIZZLE"] = (s.drizzle, "drizzle output scale")
+        write_fits(output.with_name(output.stem + "_weight" + output.suffix), weight, whdr)
     else:
         if s.crop_common:
             master, crop = _crop_common(master, coverage, len(frames))
@@ -395,6 +398,8 @@ def _output_header(project: Project, frames: list[Frame], s: Settings, bayer) ->
     hdr["DATE-OBS"] = min((f.date_obs for f in frames if f.date_obs), default="")
     hdr["SOFTWARE"] = f"APU Photons {__version__}"
     hdr["REJECT"] = s.rejection
+    # 輸出照參考 frame 的列順序（所有 frame 都對齊到它），標明方向讓後製軟體不會上下翻反
+    hdr["ROWORDER"] = (row_order(ref), "Order of pixel rows stored in the image array")
     if bayer:
         hdr["COLORTYP"] = "RGB"
     hdr["HISTORY"] = "Calibrated, registered, normalized, weighted and integrated by APU Photons"

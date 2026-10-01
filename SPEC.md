@@ -144,6 +144,7 @@ Stage 8 Post / Output
 - Downsample 0.5×：對 master 做 2×2 平均（**整合後**才做；UI 名稱為 *Downsample*，不叫 binning）。
 - 裁切到 common area（可選）。
 - 輸出：32-bit float FITS（預設）、16-bit TIFF / FITS（選用）。
+- 輸出的 FITS（master、`_stack`、`_weight`）一律寫 `ROWORDER`：照參考 frame 的列順序（FITS 沒寫就是 `BOTTOM-UP`，相機 RAW 是 `TOP-DOWN`）。資料不翻轉，只標明方向。
 - 寫出 `recipe.json` 與 `photons.log`。
 
 ---

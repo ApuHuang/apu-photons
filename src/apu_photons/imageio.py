@@ -19,6 +19,7 @@ FITS_SUFFIXES = {".fit", ".fits", ".fts"}
 RAW_SUFFIXES = {".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".pef", ".dng", ".srw"}
 IMAGE_SUFFIXES = FITS_SUFFIXES | RAW_SUFFIXES
 BAYER_PATTERNS = {"RGGB", "BGGR", "GRBG", "GBRG"}
+TOP_DOWN, BOTTOM_UP = "TOP-DOWN", "BOTTOM-UP"
 
 
 def is_image(path: Path) -> bool:
@@ -83,9 +84,18 @@ def _load_raw(path: Path) -> tuple[np.ndarray, fits.Header]:
             if isinstance(other.timestamp, datetime):
                 header["DATE-OBS"] = other.timestamp.isoformat(timespec="seconds")
     header["NAXIS2"], header["NAXIS1"] = data.shape
+    header["ROWORDER"] = TOP_DOWN  # rawpy 的第 0 列是畫面最上面
     if "DATE-OBS" not in header:
         header["DATE-OBS"] = datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")
     return data, header
+
+
+def row_order(header) -> str:
+    """影像陣列的列順序。FITS 沒寫 ROWORDER 就照標準當 bottom-up；相機 RAW 讀進來時已標 TOP-DOWN。
+
+    Photons 不翻轉資料（CFA 上下翻轉會改變 Bayer 排列，校正檔也得一起翻），只在輸出時標明實際的方向。
+    """
+    return TOP_DOWN if str(header.get("ROWORDER", "")).strip().upper() == TOP_DOWN else BOTTOM_UP
 
 
 def bayer_pattern(header: fits.Header) -> str | None:

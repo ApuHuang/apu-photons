@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .i18n import Msg
-from .imageio import bayer_pattern, file_sha256, list_images, read_header
+from .imageio import bayer_pattern, file_sha256, list_images, read_header, row_order
 from .integrations.pick import load_pick_sidecar
 from .model import Calibration, Frame, Project, Session
 
 HEADER_KEYS = ("EXPTIME", "EXPOSURE", "GAIN", "OFFSET", "CCD-TEMP", "XBINNING", "YBINNING", "BAYERPAT",
                "XBAYROFF", "YBAYROFF", "DATE-OBS", "FILTER", "INSTRUME", "TELESCOP", "FOCALLEN", "XPIXSZ",
-               "PIERSIDE", "SITELONG", "NAXIS1", "NAXIS2", "SATLEVEL", "ISO")
+               "PIERSIDE", "SITELONG", "NAXIS1", "NAXIS2", "SATLEVEL", "ISO", "ROWORDER")
 
 
 def night_of(date_obs: str | None, site_long: float | None) -> str:
@@ -94,7 +94,9 @@ def _float(v) -> float | None:
 
 
 def _check_compatible(frames: list[Frame], warnings: list[str]) -> None:
-    """尺寸與 Bayer 排列以多數為準，不一致的標記 incompatible。"""
+    """尺寸、Bayer 排列與列順序以多數為準，不一致的標記 incompatible。
+
+    列順序不同的 frame 彼此是上下鏡像，對齊（不允許鏡像）本來就對不上，這裡先講清楚原因。"""
     ok = [f for f in frames if f.accepted]
     if not ok:
         return
@@ -102,7 +104,11 @@ def _check_compatible(frames: list[Frame], warnings: list[str]) -> None:
 
     shape, _ = Counter(f.shape for f in ok).most_common(1)[0]
     bayer, _ = Counter(f.bayer for f in ok).most_common(1)[0]
+    order, _ = Counter(row_order(f.header) for f in ok).most_common(1)[0]
     for f in ok:
         if f.shape != shape or f.bayer != bayer:
             f.reject("incompatible")
             warnings.append(Msg("msg.incompatible", name=f.name, shape=f.shape, bayer=f.bayer))
+        elif row_order(f.header) != order:
+            f.reject("incompatible")
+            warnings.append(Msg("msg.roworder_mismatch", name=f.name, order=row_order(f.header), majority=order))

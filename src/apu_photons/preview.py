@@ -12,6 +12,8 @@ import numpy as np
 from astropy.io import fits
 from PIL import Image
 
+from .imageio import TOP_DOWN, row_order
+
 TARGET_BACKGROUND = 0.25
 SHADOW_CLIP = 2.8
 MAX_SIDE = 2400
@@ -49,7 +51,14 @@ def _bin(img: np.ndarray, n: int) -> np.ndarray:
 
 def load_preview(path: Path, max_side: int = MAX_SIDE) -> Image.Image:
     """master FITS → 自動拉伸的 PIL 影像（最長邊不超過 max_side）。"""
-    data = fits.getdata(path, memmap=True)
+    with fits.open(path, memmap=True) as hdul:
+        data, header = hdul[0].data, hdul[0].header
+        if row_order(header) != TOP_DOWN:
+            data = data[..., ::-1, :]  # bottom-up：第 0 列是畫面最下面，翻成由上往下顯示
+        return _render(data, max_side)
+
+
+def _render(data: np.ndarray, max_side: int) -> Image.Image:
     n = max(1, int(np.ceil(max(data.shape[-2:]) / max_side)))
     img = _bin(np.asarray(data, np.float32), n)
     step = max(1, max(img.shape[-2:]) // 1000)

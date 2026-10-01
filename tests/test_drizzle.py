@@ -37,6 +37,9 @@ def test_mono_drizzle_2x(tmp_path):
     assert driz.shape == (2 * synth.H, 2 * synth.W)
     assert (tmp_path / "m_weight.fits").is_file()
     assert res.qc["drizzle"]["holes_fraction"][0] < 0.01
+    # 三個輸出都標明列順序（light 沒寫 ROWORDER ＝ bottom-up）
+    for name in ("m.fits", "m_stack.fits", "m_weight.fits"):
+        assert fits.getheader(tmp_path / name)["ROWORDER"] == "BOTTOM-UP"
 
     # 幾何：一般疊圖的 (x, y) 對應 drizzle 的 (2x+0.5, 2y+0.5)
     sx, sy = _brightest_centroid(stack)
