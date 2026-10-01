@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import queue
 import sys
@@ -57,7 +58,7 @@ COLUMNS = [
 class FolderRow(tk.Frame):
     """calibration 資料夾一列：名稱、張數或「未使用」、選擇 / 清除。"""
 
-    def __init__(self, master: tk.Widget, app: App, kind: str, variable: tk.StringVar):
+    def __init__(self, master: tk.Widget, app: PhotonsView, kind: str, variable: tk.StringVar):
         D = Darkroom
         super().__init__(master, bg=D.panel)
         self.app, self.kind, self.var = app, kind, variable
@@ -98,9 +99,21 @@ class FolderRow(tk.Frame):
 # ---------------------------------------------------------------------- 主視窗
 
 
-class App:
-    def __init__(self, root: tk.Tk, light_dirs: list[str] | None = None):
+class PhotonsView(tk.Frame):
+    """疊圖的主畫面：可以放進任何視窗（單獨的 APU Photons 視窗，或整合版的分頁）。
+
+    不建立 tk.Tk、不碰整個視窗：視窗標題與大小、選單列、快捷鍵、關閉前的詢問都由 main() 負責。
+    對外：add_light_folder(path)、ask_add_light()、is_busy()、rebuild()、close()。
+    """
+
+    def __init__(self, parent: tk.Misc, root: tk.Tk, *, light_dirs: list[str] | None = None,
+                 on_language: Callable[[str], None] | None = None, show_language: bool = True):
+        """on_language：按下頂部列的語言切換時呼叫（由外面換語言、重建 View 與選單列）；
+        沒給就自己換語言並 rebuild()。show_language=False 時頂部列不顯示語言切換。"""
+        super().__init__(parent, bg=Darkroom.canvas)
         self.root = root
+        self.on_language = on_language
+        self.show_language = show_language
         self.light_dirs: list[Path] = []
         self.result: Result | None = None
         self.previews: dict[str, Image.Image] = {}
@@ -147,13 +160,13 @@ class App:
 
         self._scale = root.winfo_fpixels("1i") / 96.0
         self.fonts = Fonts(root)
-        root.title(f"{APP_NAME} {__version__}")
-        width = min(self.px(1320), root.winfo_screenwidth() - self.px(40))
-        height = min(self.px(900), root.winfo_screenheight() - self.px(110))
-        root.geometry(f"{width}x{height}")
-        root.minsize(self.px(1080), self.px(720))
-        root.configure(bg=Darkroom.canvas)
-        self._setup_style()
+        setup_style(root, self.px, self.fonts)
+        # 這個 View 專用的事件標籤：加在自己底下每個元件上，不用 bind_all，
+        # 跟別的畫面放在同一個視窗時（整合版的分頁）不會互相搶事件
+        self._tag = f"ApuPhotonsView{id(self)}"
+        self.bind_class(self._tag, "<Button-1>", self._maybe_close_popover, add="+")
+        self.bind_class(self._tag, "<Escape>", lambda _e: self.close_popover())
+        self.bind_class(self._tag, "<MouseWheel>", self._scroll_panel, add="+")
         self._build()
 
         for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var, self.pick_boost_var,
@@ -162,20 +175,12 @@ class App:
                     self.preview_n_var):
             var.trace_add("write", lambda *_: self._params_changed())
         self.view_var.trace_add("write", lambda *_: self._show_preview())
-        self.lang_var.trace_add("write", lambda *_: root.after_idle(self._change_language))
-        if not IS_MAC:
-            root.bind_all("<Control-o>", lambda _e: self._add_light())
-        root.bind_all("<Button-1>", self._maybe_close_popover, add="+")
-        root.bind_all("<Escape>", lambda _e: self.close_popover())
-        root.bind_all("<MouseWheel>", self._scroll_panel, add="+")
-        root.protocol("WM_DELETE_WINDOW", self._on_close)
-        if IS_MAC:
-            root.createcommand("::tk::mac::Quit", self._on_close)
+        self.lang_var.trace_add("write", lambda *_: self.after_idle(self._language_clicked))
         threading.Thread(target=self._detect_gpu, daemon=True).start()
         for d in light_dirs or []:
-            self.add_light_dir(Path(d))
+            self.add_light_folder(Path(d))
         self._refresh_all()
-        self._poll_job: str | None = root.after(100, self._poll)
+        self._poll_job: str | None = self.after(100, self._poll)
 
     def px(self, v: float) -> int:
         return int(round(v * self._scale))
@@ -183,48 +188,34 @@ class App:
     def last_dir(self) -> str:
         return str(self.light_dirs[-1].parent) if self.light_dirs else load_settings().get("last_dir", "")
 
-    # ------------------------------------------------------------------ 樣式與版面
-
-    def _setup_style(self) -> None:
-        setup_style(self.root, self.px, self.fonts)
+    # ------------------------------------------------------------------ 版面
 
     def _build(self) -> None:
-        if IS_MAC:
-            self._build_menubar()
         self._build_top_bar()
         self._build_status_bar()
-        body = tk.Frame(self.root, bg=Darkroom.canvas)
+        body = tk.Frame(self, bg=Darkroom.canvas)
         body.pack(fill="both", expand=True)
         self._build_panel(body)
         tk.Frame(body, bg=Darkroom.separator, width=1).pack(side="right", fill="y")
         self._build_canvas_area(body)
+        self._tag_widgets(self)
 
-    def _build_menubar(self) -> None:
-        root = self.root
-        menubar = tk.Menu(root)
-        app_menu = tk.Menu(menubar, name="apple", tearoff=False)
-        app_menu.add_command(label=tr("gui.menu.about"),
-                             command=lambda: root.tk.call("::tk::mac::standardAboutPanel"))
-        app_menu.add_separator()
-        menubar.add_cascade(menu=app_menu)
-        file_menu = tk.Menu(menubar, tearoff=False)
-        file_menu.add_command(label=tr("gui.menu.add_light"), accelerator="Command-O", command=self._add_light)
-        menubar.add_cascade(label=tr("gui.menu.file"), menu=file_menu)
-        edit_menu = tk.Menu(menubar, tearoff=False)
-        edit_menu.add_command(label=tr("gui.menu.copy"), accelerator="Command-C",
-                              command=lambda: self.log_text.event_generate("<<Copy>>"))
-        edit_menu.add_command(label=tr("gui.menu.select_all"), accelerator="Command-A",
-                              command=lambda: self.log_text.event_generate("<<SelectAll>>"))
-        menubar.add_cascade(label=tr("gui.menu.edit"), menu=edit_menu)
-        menubar.add_cascade(label=tr("gui.menu.window"), menu=tk.Menu(menubar, name="window"))
-        root.configure(menu=menubar)
+    def _tag_widgets(self, widget: tk.Misc) -> None:
+        """把這個 View 的事件標籤加到自己和底下每個元件（放在 'all' 之前；重建介面後要再做一次）。"""
+        tags = list(widget.bindtags())
+        if self._tag not in tags:
+            tags.insert(max(0, len(tags) - 1), self._tag)
+            widget.bindtags(tuple(tags))
+        for child in widget.winfo_children():
+            if not isinstance(child, tk.Toplevel):
+                self._tag_widgets(child)
 
     def _build_top_bar(self) -> None:
         D = Darkroom
-        bar = tk.Frame(self.root, bg=D.chrome, height=self.px(D.top_bar_height))
+        bar = tk.Frame(self, bg=D.chrome, height=self.px(D.top_bar_height))
         bar.pack(fill="x")
         bar.pack_propagate(False)
-        tk.Frame(self.root, bg=D.separator, height=1).pack(fill="x")
+        tk.Frame(self, bg=D.separator, height=1).pack(fill="x")
 
         identity = tk.Frame(bar, bg=D.chrome)
         identity.pack(side="left", padx=(self.px(14), 0))
@@ -236,9 +227,11 @@ class App:
 
         actions = tk.Frame(bar, bg=D.chrome)
         actions.pack(side="right", padx=(0, self.px(14)))
-        Segmented(actions, self, [("zh", "繁中"), ("en", "EN")], self.lang_var).pack(side="left")
-        tk.Frame(actions, bg=D.separator, width=1, height=self.px(18)).pack(side="left", padx=self.px(10))
-        self.add_btn = ttk.Button(actions, text=tr("gui.btn.add_light"), style="Dark.TButton", command=self._add_light)
+        if self.show_language:
+            Segmented(actions, self, [("zh", "繁中"), ("en", "EN")], self.lang_var).pack(side="left")
+            tk.Frame(actions, bg=D.separator, width=1, height=self.px(18)).pack(side="left", padx=self.px(10))
+        self.add_btn = ttk.Button(actions, text=tr("gui.btn.add_light"), style="Dark.TButton",
+                                  command=self.ask_add_light)
         self.add_btn.pack(side="left")
         Tooltip(self.add_btn, tr("gui.btn.add_light.help", shortcut=OPEN_SHORTCUT), self)
         self.trial_btn = ttk.Button(actions, text=tr("gui.btn.trial"), style="Dark.TButton",
@@ -255,10 +248,10 @@ class App:
 
     def _build_status_bar(self) -> None:
         D = Darkroom
-        bar = tk.Frame(self.root, bg=D.chrome, height=self.px(D.status_bar_height))
+        bar = tk.Frame(self, bg=D.chrome, height=self.px(D.status_bar_height))
         bar.pack(side="bottom", fill="x")
         bar.pack_propagate(False)
-        tk.Frame(self.root, bg=D.separator, height=1).pack(side="bottom", fill="x")
+        tk.Frame(self, bg=D.separator, height=1).pack(side="bottom", fill="x")
         self.indicator = tk.Frame(bar, bg=D.chrome)
         self.indicator.pack(side="left", padx=(self.px(14), 0))
         self.status_dot = tk.Canvas(self.indicator, width=self.px(7), height=self.px(7), bg=D.chrome,
@@ -376,7 +369,7 @@ class App:
             side="left", padx=self.px(12), pady=self.px(6))
         self.remove_btn = ttk.Button(top, text=tr("gui.btn.remove"), style="Dark.TButton", command=self._remove_light)
         self.remove_btn.pack(side="right", padx=(0, self.px(12)))
-        ttk.Button(top, text=tr("gui.btn.add"), style="Dark.TButton", command=self._add_light).pack(
+        ttk.Button(top, text=tr("gui.btn.add"), style="Dark.TButton", command=self.ask_add_light).pack(
             side="right", padx=(0, self.px(6)))
         self.dir_tree = ttk.Treeview(light, columns=("path", "n"), show="headings", height=4, style="Dark.Treeview",
                                      selectmode="extended")
@@ -486,30 +479,36 @@ class App:
 
     # ------------------------------------------------------------------ 語言
 
-    def _change_language(self) -> None:
+    def _language_clicked(self) -> None:
         lang = self.lang_var.get()
         if lang not in LANGUAGES or lang == get_language():
             return
-        if self._busy():  # 執行中不換：重建介面會打斷進度顯示
+        if self.is_busy():  # 執行中不換：重建介面會打斷進度顯示
             self.lang_var.set(get_language())
             return
-        set_language(lang)
-        save_settings(language=lang)
-        self._rebuild()
+        if self.on_language is not None:
+            self.on_language(lang)
+        else:
+            set_language(lang)
+            save_settings(language=lang)
+            self.rebuild()
 
-    def _rebuild(self) -> None:
-        """換語言：整個重建介面，資料夾、設定、結果都保留。"""
+    def rebuild(self) -> None:
+        """照目前語言重建介面；資料夾、設定、結果都保留。"""
+        if self.lang_var.get() != get_language():
+            self.lang_var.set(get_language())
         self.close_popover()
-        for child in self.root.winfo_children():
+        for child in self.winfo_children():
             child.destroy()
         self._build()
         self._refresh_all()
-        self.root.update_idletasks()
+        self.update_idletasks()
         self._relayout_panel()
 
     # ------------------------------------------------------------------ 資料夾
 
-    def add_light_dir(self, folder: Path) -> None:
+    def add_light_folder(self, folder: str | Path) -> None:
+        """加入一個 Light 資料夾（整合版也呼叫這個）。"""
         folder = Path(folder)
         if not folder.is_dir() or folder in self.light_dirs:
             return
@@ -520,15 +519,24 @@ class App:
         self.result = None
         self._refresh_all()
 
-    def _add_light(self) -> None:
-        if self._busy():
+    def ask_add_light(self) -> None:
+        """選擇資料夾後加入（選單「加入 Light 資料夾…」與 ⌘O／Ctrl+O 呼叫這個）。"""
+        if self.is_busy():
             return
         path = filedialog.askdirectory(parent=self.root, title=tr("gui.btn.add_light"), initialdir=self.last_dir())
         if path:
-            self.add_light_dir(Path(path))
+            self.add_light_folder(path)
+
+    def copy_selection(self) -> None:
+        """選單「拷貝」：拷貝紀錄分頁選取的文字。"""
+        self.log_text.event_generate("<<Copy>>")
+
+    def select_all(self) -> None:
+        """選單「全選」：選取紀錄分頁的全部文字。"""
+        self.log_text.event_generate("<<SelectAll>>")
 
     def _remove_light(self) -> None:
-        if self._busy():
+        if self.is_busy():
             return
         chosen = {self.dir_tree.index(i) for i in self.dir_tree.selection()}
         self.light_dirs = [d for i, d in enumerate(self.light_dirs) if i not in chosen]
@@ -631,18 +639,19 @@ class App:
 
     # ------------------------------------------------------------------ 執行
 
-    def _busy(self) -> bool:
+    def is_busy(self) -> bool:
+        """有疊圖在跑（關閉視窗前要詢問）。"""
         return self.worker is not None and self.worker.is_alive()
 
     def _stack_or_stop(self) -> None:
-        if self._busy():
+        if self.is_busy():
             self.cancel.set()
             self._status(lambda: tr("gui.status.stopping"))
         else:
             self._start(trial=False)
 
     def _start(self, trial: bool) -> None:
-        if self._busy() or not self.light_dirs:
+        if self.is_busy() or not self.light_dirs:
             return
         if not self.output_var.get():
             self._choose_output()
@@ -687,7 +696,7 @@ class App:
                 self._handle(self.events.get_nowait())
         except queue.Empty:
             pass
-        self._poll_job = self.root.after(100, self._poll)
+        self._poll_job = self.after(100, self._poll)
 
     def drain(self) -> None:
         """測試用：把佇列裡的事件全部處理掉。"""
@@ -759,7 +768,7 @@ class App:
         D = Darkroom
         if not self.indicator.winfo_exists():
             return
-        if self._busy():
+        if self.is_busy():
             self.status_dot.pack_forget()
             self.progress.pack(side="left")
             if self._stage and self._stage[2]:
@@ -775,7 +784,7 @@ class App:
 
     def _refresh_all(self) -> None:
         D = Darkroom
-        busy = self._busy()
+        busy = self.is_busy()
         self.status_var.set(self._status_fn())
         self._update_progress()
         self._update_output_rules()
@@ -892,31 +901,39 @@ class App:
 
     # ------------------------------------------------------------------ 關閉
 
-    def _on_close(self) -> None:
-        if self._busy():
-            if not messagebox.askyesno(APP_NAME, tr("gui.close.confirm"), parent=self.root):
-                return
-            self.cancel.set()
-            # 行程要等 worker 做完手上這一段才會結束；先把視窗收起來，不然 Mac 上視窗會停在畫面上十幾秒
-            self.root.withdraw()
-            self.root.update()
-        self.close()
-        self.root.destroy()
-
     def close(self) -> None:
-        """停掉計時器、解除全域綁定、清掉畫面；之後 root 可以直接關掉，或拿來開新的 App。"""
+        """取消背景工作、停掉排程、關掉說明氣泡。呼叫端接著 destroy() 這個 View；
+        關掉之後請在主執行緒 gc.collect()，不然 View 的 Tk 變數可能在背景執行緒被循環回收釋放。
+        疊圖的 worker 收到取消後，會在下一個檢查點結束。"""
         self.cancel.set()
         if self._poll_job is not None:
             try:
-                self.root.after_cancel(self._poll_job)
-            except tk.TclError:
+                self.after_cancel(self._poll_job)
+            except (tk.TclError, ValueError):
                 pass
             self._poll_job = None
         self.close_popover()
-        for sequence in ("<Control-o>", "<Button-1>", "<Escape>", "<MouseWheel>"):
-            self.root.unbind_all(sequence)
-        for child in self.root.winfo_children():
-            child.destroy()
+
+
+# ---------------------------------------------------------------------- 視窗
+
+
+def _build_menubar(root: tk.Tk, view: PhotonsView) -> None:
+    """Mac 的選單列（Windows 沿用原本的做法，不放選單列）。"""
+    menubar = tk.Menu(root)
+    app_menu = tk.Menu(menubar, name="apple", tearoff=False)
+    app_menu.add_command(label=tr("gui.menu.about"), command=lambda: root.tk.call("::tk::mac::standardAboutPanel"))
+    app_menu.add_separator()
+    menubar.add_cascade(menu=app_menu)
+    file_menu = tk.Menu(menubar, tearoff=False)
+    file_menu.add_command(label=tr("gui.menu.add_light"), accelerator="Command-O", command=view.ask_add_light)
+    menubar.add_cascade(label=tr("gui.menu.file"), menu=file_menu)
+    edit_menu = tk.Menu(menubar, tearoff=False)
+    edit_menu.add_command(label=tr("gui.menu.copy"), accelerator="Command-C", command=view.copy_selection)
+    edit_menu.add_command(label=tr("gui.menu.select_all"), accelerator="Command-A", command=view.select_all)
+    menubar.add_cascade(label=tr("gui.menu.edit"), menu=edit_menu)
+    menubar.add_cascade(label=tr("gui.menu.window"), menu=tk.Menu(menubar, name="window"))
+    root.configure(menu=menubar)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -937,7 +954,47 @@ def main(argv: list[str] | None = None) -> int:
             root.iconbitmap(default=str(ICON))
         except tk.TclError:
             pass
-    App(root, argv)
+    scale = root.winfo_fpixels("1i") / 96.0
+    width = min(int(round(1320 * scale)), root.winfo_screenwidth() - int(round(40 * scale)))
+    height = min(int(round(900 * scale)), root.winfo_screenheight() - int(round(110 * scale)))
+    root.geometry(f"{width}x{height}")
+    root.minsize(int(round(1080 * scale)), int(round(720 * scale)))
+    root.configure(bg=Darkroom.canvas)
+    root.title(f"{APP_NAME} {__version__}")
+
+    def change_language(lang: str) -> None:
+        set_language(lang)
+        save_settings(language=lang)
+        view.rebuild()
+        if IS_MAC:
+            _build_menubar(root, view)  # 選單文字跟著換
+
+    view = PhotonsView(root, root, light_dirs=[a for a in argv if not a.startswith("-")],
+                       on_language=change_language)
+    view.pack(fill="both", expand=True)
+    if IS_MAC:
+        _build_menubar(root, view)
+    else:
+        root.bind_all("<Control-o>", lambda _e: view.ask_add_light())
+
+    def on_close() -> None:
+        busy = view.is_busy()
+        if busy and not messagebox.askyesno(APP_NAME, tr("gui.close.confirm"), parent=root):
+            return
+        view.close()
+        if busy:
+            # 行程要等 worker 做完手上這一段才會結束；先把視窗收起來，不然 Mac 上視窗會停在畫面上十幾秒
+            root.withdraw()
+            root.update()
+        view.destroy()
+        gc.collect()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    if IS_MAC:
+        root.createcommand("::tk::mac::Quit", on_close)
+        # 把資料夾拖到 Dock 圖示上：當成 Light 資料夾加入
+        root.createcommand("::tk::mac::OpenDocument", lambda *paths: [view.add_light_folder(p) for p in paths])
     dark_title_bar(root)
     root.mainloop()
     return 0

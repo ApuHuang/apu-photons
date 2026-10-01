@@ -3,6 +3,7 @@
 Tk 在同一個行程只建一次（APU Pick 踩過：反覆建立、關閉 Tk 在 Windows 偶爾失敗、Mac 雲端機會卡死）。
 """
 
+import gc
 import time
 import tkinter as tk
 
@@ -32,18 +33,21 @@ def app(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(gui.messagebox, "showerror", lambda *a, **k: None)
     monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: True)
     set_language("zh")
-    a = gui.App(tk_root)
+    a = gui.PhotonsView(tk_root, tk_root)
+    a.pack(fill="both", expand=True)
     yield a
     a.close()
+    a.destroy()
+    gc.collect()
     set_language("zh")
 
 
 def _wait(app, timeout=120):
     end = time.time() + timeout
-    while app._busy() and time.time() < end:
+    while app.is_busy() and time.time() < end:
         time.sleep(0.05)
     app.drain()
-    assert not app._busy()
+    assert not app.is_busy()
 
 
 def test_catalogs_match():
@@ -67,7 +71,7 @@ def test_output_rules(app):
 
 def test_stack_flow_and_language(app, tmp_path):
     light, cal = _make(tmp_path)
-    app.add_light_dir(light)
+    app.add_light_folder(light)
     assert app.output_var.get().endswith(".fits")
     assert len(app.tree.get_children()) == 8          # 還沒跑：列出檔案
     app.output_var.set(str(tmp_path / "out" / "m.fits"))
@@ -76,7 +80,7 @@ def test_stack_flow_and_language(app, tmp_path):
     assert len(app.calibration().dark) == 5
     app.workers_var.set(2)
     app._start(trial=False)
-    assert app._busy()
+    assert app.is_busy()
     _wait(app)
     assert app.result is not None, app.log_lines[-3:]
     assert app.result.qc["frames_integrated"] == 8
@@ -87,7 +91,7 @@ def test_stack_flow_and_language(app, tmp_path):
     assert len(rows) == 8 and any(r[7] == "參考 frame" for r in rows)
     # 換語言：重建介面，結果保留
     app.lang_var.set("en")
-    app._change_language()
+    app._language_clicked()
     rows = [app.tree.item(i, "values") for i in app.tree.get_children()]
     assert any(r[7] == "Reference frame" for r in rows)
     assert app.metrics["integrated"].value.cget("text") == "8"
@@ -96,7 +100,7 @@ def test_stack_flow_and_language(app, tmp_path):
 
 def test_trial_and_cancel(app, tmp_path):
     light, _cal = _make(tmp_path, with_cal=False)
-    app.add_light_dir(light)
+    app.add_light_folder(light)
     app.output_var.set(str(tmp_path / "t" / "m.fits"))
     app.preview_n_var.set(5)
     app.workers_var.set(1)
@@ -138,3 +142,53 @@ def test_panel_scroll_follows_delta(app, monkeypatch):
         event.delta = delta
         app._scroll_panel(event)
     assert calls == [-1, 1, -6, -3, 6]
+
+
+def test_view_is_embeddable(tk_root, tmp_path, monkeypatch):
+    """整合版的用法：兩個畫面放在同一個視窗，事件各管各的；關掉一個不會動到另一個。"""
+    monkeypatch.setenv("APU_PHOTONS_SETTINGS", str(tmp_path / "settings.json"))
+    other = tk.Frame(tk_root)
+    other.pack()
+    marker = tk.Label(other, text="別的分頁")
+    marker.pack()
+    a = gui.PhotonsView(tk_root, tk_root)
+    b = gui.PhotonsView(tk_root, tk_root, show_language=False)
+    try:
+        # 事件綁在各自的 tag，不是整個程式共用的 bind_all
+        for seq in ("<Button-1>", "<Escape>", "<MouseWheel>"):
+            assert not tk_root.bind_all(seq)
+        assert a._tag != b._tag and a._tag in a.stack_btn.bindtags() and a._tag not in b.stack_btn.bindtags()
+        assert a._tag not in marker.bindtags()
+        # 說明氣泡：b 的 Esc 不會關掉 a 的
+        a.show_popover(a.stack_btn, "a")
+        b.show_popover(b.stack_btn, "b")
+        b.close_popover()
+        assert a.popover is not None
+        # 外面接管語言切換
+        asked = []
+        c = gui.PhotonsView(tk_root, tk_root, on_language=asked.append)
+        c.lang_var.set("en")
+        c._language_clicked()
+        assert asked == ["en"] and gui.get_language() == "zh"
+        c.close()
+        c.destroy()
+        # 重建與關閉只動自己
+        a.rebuild()
+        a.close()
+        a.destroy()
+        assert marker.winfo_exists() and b.winfo_exists() and b.stack_btn.winfo_exists()
+    finally:
+        for v in (a, b):
+            if v.winfo_exists():
+                v.close()
+                v.destroy()
+        other.destroy()
+        gc.collect()
+
+
+def test_add_light_folder_entry(app, tmp_path):
+    light, _cal = _make(tmp_path, with_cal=False)
+    app.add_light_folder(str(light))   # 字串路徑也可以
+    app.add_light_folder(light)        # 重複的不加
+    assert app.light_dirs == [light]
+    assert not app.is_busy()
