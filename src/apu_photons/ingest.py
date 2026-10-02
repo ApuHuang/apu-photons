@@ -116,17 +116,27 @@ def classify(path: Path, header: dict) -> tuple[str, str | None, bool]:
     """（類型, 來源, 是否做好的 master）。來源：header / filename / folder；判斷不出來是 (unknown, None)。"""
     imagetyp = header.get("IMAGETYP")
     is_master = bool(_MASTER.search(path.stem)) or bool(_MASTER.search(str(imagetyp or "")))
+    by_name, source = _kind_from_name(path)
     kind = _kind_from_imagetyp(imagetyp)
+    if kind == "light" and by_name not in (None, "light"):
+        # 很多拍攝軟體的預設類型就是 LIGHT（例如在 NINA 用一般序列拍 flat）；檔名或資料夾明確寫了校正檔就以名稱為準
+        return by_name, source, is_master
     if kind:
         return kind, "header", is_master and kind != "light"
+    if by_name:
+        return by_name, source, is_master and by_name != "light"
+    return UNKNOWN, None, False
+
+
+def _kind_from_name(path: Path) -> tuple[str | None, str | None]:
     kind = _kind_from_text(path.stem)
     if kind:
-        return kind, "filename", is_master and kind != "light"
+        return kind, "filename"
     for parent in (path.parent, path.parent.parent):
         kind = _kind_from_text(parent.name)
         if kind:
-            return kind, "folder", is_master and kind != "light"
-    return UNKNOWN, None, False
+            return kind, "folder"
+    return None, None
 
 
 _HEADERS: dict[tuple, dict] = {}

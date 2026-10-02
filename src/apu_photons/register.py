@@ -19,6 +19,7 @@ MATCH_RADIUS = 2.0
 MIN_INLIERS = 8
 MAX_RESIDUAL = 1.0
 RANSAC_ITERS = 400
+SCALE_TOL = 0.1  # 縮放倍率與預期差超過 10% 就是錯配（同一套器材應該是 1）
 
 
 class RegistrationError(RuntimeError):
@@ -62,9 +63,25 @@ def apply(m: np.ndarray, xy: np.ndarray) -> np.ndarray:
     return xy @ m[:2, :2].T + m[:2, 2]
 
 
-def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | None = None
-             ) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
-    """src_xy、ref_xy 依亮度由亮到暗排序。回傳（3×3 變換, 殘差 RMS 像素, 配對的 src 索引, 對應的 ref 索引）。"""
+def scale_of(m: np.ndarray) -> float:
+    return float(np.sqrt(abs(np.linalg.det(m[:2, :2]))))
+
+
+def _plausible(m: np.ndarray, expected: float | None) -> bool:
+    """縮放倍率合理。縮到接近 0 時所有星點會擠到同一顆星附近，殘差反而很小，必須另外擋掉。"""
+    if not np.all(np.isfinite(m)):
+        return False
+    s = scale_of(m)
+    if expected is None:
+        return 0.2 < s < 5.0
+    return abs(s / expected - 1.0) <= SCALE_TOL
+
+
+def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | None = None,
+             expected_scale: float | None = 1.0) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+    """src_xy、ref_xy 依亮度由亮到暗排序。回傳（3×3 變換, 殘差 RMS 像素, 配對的 src 索引, 對應的 ref 索引）。
+
+    expected_scale：預期的縮放倍率（同一套器材是 1；合併不同器材時是像素尺度的比例；None＝不知道，只擋明顯不合理的）。"""
     if len(src_xy) < 4 or len(ref_xy) < 4:
         raise RegistrationError(Msg("msg.reg.few_stars"))
     rng = rng or np.random.default_rng(0)
@@ -90,6 +107,8 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
         if np.linalg.norm(a[idx[0]] - a[idx[1]]) < 5:
             continue
         m = similarity(a[idx], b[idx])
+        if not _plausible(m, expected_scale):
+            continue
         n = int((np.linalg.norm(apply(m, a) - b, axis=1) < MATCH_RADIUS * 2).sum())
         if n > best_n:
             best, best_n = m, n
@@ -105,6 +124,8 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
         if ok.sum() < MIN_INLIERS:
             raise RegistrationError(Msg("msg.reg.few_matches", n=int(ok.sum())))
         m = similarity(src_xy[ok], ref_xy[j[ok]])
+    if not _plausible(m, expected_scale):
+        raise RegistrationError(Msg("msg.reg.scale", scale=scale_of(m) if np.all(np.isfinite(m)) else float("nan")))
     dist, j = ref_tree.query(apply(m, src_xy))
     ok = dist < MATCH_RADIUS
     rms = float(np.sqrt(np.mean(dist[ok] ** 2)))

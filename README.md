@@ -2,7 +2,7 @@
 
 Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 
-工作流：**APU Pick**（挑片）→ **APU Photons**（疊圖）→ **APU Astro**（後製）
+工作流：**APU Pick**（挑片）→ **APU Photons**（疊圖）→ **APU Processing**（後製），同屬 APU Astro 系列。
 
 設計規格見 [SPEC.md](SPEC.md)。目前開發 0.2：多組資料（濾鏡、相機、光學系統）、校正檔自動配對、檔案輸入。
 
@@ -12,7 +12,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 .venv\Scripts\apu-photons-gui
 ```
 
-與 APU Astro、APU Pick 同一套暗房介面：頂部列（加入檔案、試跑、疊圖／停止、繁中｜EN）、
+與 APU Processing、APU Pick 同一套暗房介面：頂部列（加入檔案、試跑、疊圖／停止、繁中｜EN）、
 右側可收合面板（結果、校正、疊圖、輸出、效能，說明在 ⓘ 裡）、底部狀態列（進度與剩餘時間）。
 
 - **檔案**：light 與 dark、flat、bias 一起加入（可以多選、分幾次加入），類型自動判斷；

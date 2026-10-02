@@ -54,6 +54,10 @@ def _flats(folder, filt, night, n=3, cam=CAM):
     ("M31/Lights/night1/DSC0001.ARW", {}, ("light", "folder", False)),
     ("M31/DSC0001.ARW", {}, ("unknown", None, False)),
     ("x/darkness.fits", {}, ("unknown", None, False)),
+    # NINA 用一般序列拍的 flat：header 是預設的 LIGHT，資料夾寫 FLAT → 以資料夾為準（NGC2244 實拍資料）
+    ("G/NGC2244/FLAT/2026-02-15_S_2.50s_0000.fits", {"IMAGETYP": "LIGHT"}, ("flat", "folder", False)),
+    ("x/DARK/MasterDark_300s.fits", {"IMAGETYP": "LIGHT"}, ("dark", "filename", True)),
+    ("x/NGC2244/H/a.fits", {"IMAGETYP": "LIGHT"}, ("light", "header", False)),
 ])
 def test_classify(path, header, expected):
     from pathlib import Path
@@ -169,3 +173,21 @@ def test_merge_optical_trains(tmp_path):
     assert res.project.trains[ag.reference.train].camera == "CamA"  # 較細的網格
     b_scales = [np.hypot(*f.transform[:2, 0]) for f in out.frames if f.train != ag.reference.train]
     assert np.allclose(b_scales, 4.7 / 3.76, atol=0.01)
+
+
+def test_register_rejects_implausible_scale():
+    """縮放倍率不合理就判定失敗，不能讓近乎退化的變換進到整合（NGC2244：flat 被當成 light 時整合出現 Singular matrix）。"""
+    from apu_photons.register import RegistrationError, scale_of
+
+    a = synth.render(0, 0, 0, seed=1)
+    sa = detect(a, None)
+    ref = np.column_stack([sa.x, sa.y])
+    cx, cy = synth.W / 2, synth.H / 2
+    half = np.column_stack([cx + (sa.x - cx) * 0.5, cy + (sa.y - cy) * 0.5])  # 同一片天、縮成一半
+    with pytest.raises(RegistrationError):
+        register(half, ref)                          # 同一套器材：倍率應該是 1
+    m, *_ = register(half, ref, expected_scale=2.0)  # 合併不同器材：預期的倍率
+    assert abs(scale_of(m) - 2.0) < 0.01
+    noise = np.random.default_rng(3).uniform(0, [synth.W, synth.H], (60, 2))
+    with pytest.raises(RegistrationError):
+        register(noise, ref)                         # 沒有星點的影像（例如 flat）配不上

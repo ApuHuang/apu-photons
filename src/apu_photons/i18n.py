@@ -1,4 +1,4 @@
-"""介面文字：繁體中文（預設）與英文，用詞比照 APU Astro 與 APU Pick。
+"""介面文字：繁體中文（預設）與英文，用詞比照 APU Processing 與 APU Pick。
 
 程式裡只放代號，顯示時才用 tr() 依目前語言轉成文字。兩份的代號必須一致（tests/test_gui.py 會檢查）。
 
@@ -793,6 +793,13 @@ _EN.update({
     'msg.recipe_missing': '{name} not found ({path})',
     'msg.recipe_changed': '{name} has changed since then',
     'msg.recipe_v1_settings_only': 'This is a 0.1 recipe; only its settings can be applied',
+})
+
+_ZH.update({
+    'msg.reg.scale': '縮放倍率 {scale:.3f} 不合理（同一套器材應該接近 1），可能不是星點影像或配錯星',
+})
+_EN.update({
+    'msg.reg.scale': 'implausible scale {scale:.3f} (should be close to 1 for the same rig); not a star image, or stars mismatched',
 })
 
 _CATALOG = {"zh": _ZH, "en": _EN}

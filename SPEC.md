@@ -1,7 +1,7 @@
 # APU Photons — Technical Specification (v0.2)
 
 > Astrophotography Photons Utility
-> 工作流：**APU Pick → APU Photons → APU Astro**
+> 工作流：**APU Pick → APU Photons → APU Processing**（APU Astro 系列；後製軟體原名 APU Astro，2026-10 改名）
 > Pick the frames. Collect the photons. Process the image.
 
 本文件依據 2026-09-28 Claude 與 ChatGPT 的三輪審查整理出 MVP（0.1），2026-10-01 依試跑後的討論定案 0.2。
@@ -67,13 +67,13 @@
 - 跨專案的校正檔庫
 
 ### V2
-- 不同光學系統之間的 master 對齊輸出（目前交給 APU Astro）
+- 不同光學系統之間的 master 對齊輸出（目前交給 APU Processing）
 - Mosaic
 
 ### 暫不做
 - 自創 calibration 演算法
 - 非星點式對齊（行星、月面）
-- 後製（屬於 APU Astro）：RGB / HOO / SHO 合成、去梯度、拉伸
+- 後製（屬於 APU Processing）：RGB / HOO / SHO 合成、去梯度、拉伸
 
 ---
 
@@ -107,7 +107,7 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   - 曝光、增益不同 → 由正規化（星點亮度比例＋背景偏移）對齊亮度，SNR² 權重讓訊號好的片占比較多；
   - 校正時各用對應條件的 dark / bias；飽和門檻每張各自判斷。
 - 正規化、權重、剔除都在同一整合組內進行；跨組不比較亮度。
-- 同一對齊組的各濾鏡 master 像素完全對齊，APU Astro 合成時不必再對齊；**不同對齊組之間不對齊**，由 APU Astro 處理。
+- 同一對齊組的各濾鏡 master 像素完全對齊，APU Processing 合成時不必再對齊；**不同對齊組之間不對齊**，由 APU Processing 處理。
 
 #### 3.1.1 光學系統的判斷
 - FITS：`INSTRUME` + `XPIXSZ` + 影像尺寸 + `BAYERPAT` + `FOCALLEN`。
@@ -144,6 +144,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   2. 檔名關鍵字；
   3. 上層資料夾名稱關鍵字（`light(s)`、`dark(s)`、`bias`、`flat(s)`、`flatdark`／`darkflat`／`flat-dark`／`dark flat`，不分大小寫）；
   4. 都判斷不出來 → 標成「未知」，請使用者指定，不參與疊圖。
+  - 例外：header 寫 `LIGHT`、但檔名或資料夾名稱明確寫了 dark / flat / bias / flat-dark 時，**以名稱為準**。
+    `LIGHT` 是多數拍攝軟體的預設值，用一般序列拍的 flat 也會寫 `LIGHT`（NGC2244 實拍：FLAT 資料夾 280 張都是 `IMAGETYP=LIGHT`）。
 - **做好的 master**：
   - 檔名或 `IMAGETYP` 含 `master`（不分大小寫）→ master；
   - 判斷不出來、但同一套校正檔（同類型＋同配對條件）只有一張 → 視為 master；
@@ -193,6 +195,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - 星點偵測：背景估計 → 閾值 → centroid，並記錄 FWHM、flux、偏心率。
 - 配對：三角形不變量匹配 + RANSAC。
 - 變換模型：預設 **similarity（平移＋旋轉＋等比縮放）**；affine 為選用，且需通過殘差檢查。錯配的風險大於對不上，配對失敗的 frame 標記 `rejected(reason=registration_failed)`。
+- 縮放倍率檢查：同一套器材的變換縮放必須在 1 ± 10%；合併不同器材時以兩者像素尺度的比例為準（不知道時只擋 0.2～5 倍以外的）。
+  縮放接近 0 時所有星點會擠到同一顆星附近、殘差反而很小，不擋的話會在整合時出現無法反轉的變換（NGC2244 實拍：flat 被當成 light）。
 - 中天翻轉：允許 ~180° 旋轉解。
 - **參考 frame：每個對齊組一張**（0.2）。自動選擇時在整個對齊組（所有濾鏡）裡，以 FWHM 低、偏心率低、星點數多、背景低綜合評分；可手動指定。不同濾鏡的片都對齊到這張。
 - Dither 分析：統計 transform 平移分量的小數部分分布，供 drizzle 適用性判斷（每個整合組各自判斷）。
@@ -239,8 +243,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   - 找範圍的方法：從整張開始，每次把四條邊裡達標比例最低的那條往內收一格，直到四條邊都有 99.5% 以上的像素達標
     （0.1 分別看每一列、每一行是否 98% 達標；中天翻轉後上下各缺一條、邊緣又略斜時，幾乎每一行都差一點，會裁掉大半張）；
   - 同一對齊組的所有整合組**用同一個裁切範圍**（各整合組範圍的交集），各濾鏡 master 才能像素對齊；
-  - 可關閉；需要完整視野（例如之後的 mosaic）時，交給 APU Astro 的非破壞裁切決定。
-  - 保留自動裁切的理由：邊緣只被少數 frame 覆蓋，雜訊高、可能有對齊邊界痕跡，會干擾 APU Astro 的去光害梯度與自動拉伸。
+  - 可關閉；需要完整視野（例如之後的 mosaic）時，交給 APU Processing 的非破壞裁切決定。
+  - 保留自動裁切的理由：邊緣只被少數 frame 覆蓋，雜訊高、可能有對齊邊界痕跡，會干擾 APU Processing 的去光害梯度與自動拉伸。
 - **覆蓋率圖**（0.2）：每個 master 一律另外輸出 `_coverage.fits`（每個像素被幾張覆蓋，裁切後與 master 同尺寸）。
 - 輸出格式：32-bit float FITS（預設）、16-bit FITS（選用）。
 - 輸出的 FITS（master、`_stack`、`_weight`、`_coverage`）一律寫 `ROWORDER`：照參考 frame 的列順序（FITS 沒寫就是 `BOTTOM-UP`，相機 RAW 是 `TOP-DOWN`）。資料不翻轉，只標明方向。
@@ -441,7 +445,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
 - 與完整執行共用同一套 cache。
 
 ### 6.5 結果預覽放大（0.2）
-- 比照 APU Astro：滾輪縮放 25%～400%、拖曳平移、一鍵「適合視窗」與 100%。
+- 比照 APU Processing：滾輪縮放 25%～400%、拖曳平移、一鍵「適合視窗」與 100%。
 - 放大時才從輸出 FITS（memmap）讀出可見區域；拉伸參數用整張圖算一次後固定，縮放時亮度不跳。
 - 「一般疊圖／Drizzle」切換時保持同一位置與倍率，直接比較細節。
 - 用下拉選單切換各整合組的 master；同一對齊組切換時保持位置（像素對齊，可直接比較 Ha / OIII）。
@@ -561,7 +565,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
 |---|---|---|
 | 分組 | 光學系統／對齊組／整合組／校正組（§3.1） | 「哪些可以平均」（訊號）與「用哪套校正檔」（感光條件）是兩件事；同濾鏡不同曝光、增益可以疊在一起，但各用對應的 dark |
 | 不同光學系統、同濾鏡 | 預設各自輸出 master；可選合併 | 合併要重新取樣、換算 FWHM、只留重疊區，彩色相機還會偏色；預設保守 |
-| 對齊參考 | **每個對齊組一張**，組內各濾鏡共用 | 同一套器材的各濾鏡 master 像素對齊，APU Astro 直接合成；不同器材若硬對齊到同一張參考，像素較細的一組會損失解析度 |
+| 對齊參考 | **每個對齊組一張**，組內各濾鏡共用 | 同一套器材的各濾鏡 master 像素對齊，APU Processing 直接合成；不同器材若硬對齊到同一張參考，像素較細的一組會損失解析度 |
 | Drizzle | 對齊組統一設定，適用性每個整合組各自提醒、使用者決定 | 同組各濾鏡 drizzle 倍率不同會對不齊 |
 | 裁切 | 對齊組共用裁切範圍，預設 90% 覆蓋、可調、可關，一律輸出覆蓋率圖 | 保留視野，又不讓邊緣的高雜訊干擾後製；共用範圍才能對齊 |
 | 輸入 | 檔案，不掃資料夾 | 使用者直接控制要疊哪些片；Pick 的 `rejected/` 不會被誤讀 |
@@ -586,3 +590,11 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   - 輸出 `NGC1499_Ha.fits`、`NGC1499_OIII.fits` 與各自的覆蓋率圖，兩者尺寸相同、像素對齊。
 - 實測（2026-10-02，0.2.0.dev0，RTX 3090）：以上全部符合；兩個 master 都是 5450×3597，互相對齊的殘差 0.06 px、旋轉 0.0004°；熱像素 69,591 個（0.1 的整張門檻是 478,282 個，多的是 amp glow）；全程 167 秒。試跑（每組 5 張，跨中天翻轉）時發現 0.1 的裁切法只留 2236 px 寬，改成往內收邊後是 5470 px。
 - flat、多晚、多光學系統、彩色相機 RAW 混入等情況用合成資料測試。
+
+### 10.4 0.2.0.dev0 實測問題（2026-10-02，`G:\NGC2244`，SHO：H 24、O 56、S 54，dark 313，flat 280，無 bias）
+- 使用者實測時整合出錯（`Singular matrix`），master 先退回 0.1.0，0.2 在 `v0.2` 分支修正：
+  - FLAT 資料夾的檔案 header 都是 `IMAGETYP=LIGHT` → 被當成 light 疊進去 → 改成名稱優先（Stage 0 例外規則）；
+  - 某張 flat「對齊」成功但縮放接近 0 → 整合時反轉變換失敗 → 加上縮放倍率檢查（Stage 3）；
+  - 視窗只顯示一行錯誤 → 完整的錯誤經過寫進紀錄檔與紀錄分頁。
+- 修正後同一組資料（使用者先用 APU Pick 淘汰 14 張，剩 120 張）：H 21、O 51、S 44 張整合，3 個 master 5368×3141，367 秒；
+  flat 是 2/15 拍的、light 是 2/12～2/13，依規則不自動使用，提醒可手動選。

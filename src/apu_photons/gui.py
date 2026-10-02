@@ -1,4 +1,4 @@
-"""視窗介面，與 APU Astro、APU Pick 同一套介面語言：暗房深色主題、頂部列、右側可收合參數面板、底部狀態列。
+"""視窗介面，與 APU Processing、APU Pick 同一套介面語言（APU Astro 系列）：暗房深色主題、頂部列、右側可收合參數面板、底部狀態列。
 
 流程（0.2）：加入檔案（light 與校正檔一起）→ 自動分類、分組、配對校正檔（可以改）→ 試跑或疊圖 →
 在「結果」分頁逐組放大檢視。
@@ -244,7 +244,7 @@ class PhotonsView(tk.Frame):
         self.stack_btn.pack(side="left", padx=(self.px(6), 0))
         Tooltip(self.stack_btn, tr("gui.btn.stack.help"), self)
 
-        # 中間：目標名稱（輸出檔名的開頭），對應 APU Astro 的文件名稱
+        # 中間：目標名稱（輸出檔名的開頭），對應 APU Processing 的文件名稱
         self.doc_title = tk.Label(bar, font=self.fonts.ui, bg=D.chrome)
         self.doc_title.pack(side="left", expand=True, padx=self.px(16))
 
@@ -1185,7 +1185,7 @@ class PhotonsView(tk.Frame):
             self._refresh_all()
         elif kind == "error":
             self.worker = None
-            self.log_lines.append(event[2])
+            self._append_log(event[2])
             message = event[1]
             self._status(lambda: tr("gui.status.error", message=message))
             self._refresh_all()

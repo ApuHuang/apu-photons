@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import time
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -169,6 +170,14 @@ def run(inputs: list[Path], output_dir: Path, settings: Settings | None = None, 
     warnings: list = []
     try:
         return _run([Path(p) for p in inputs], output_dir, s, cache, log, warnings, t0, report)
+    except Cancelled:
+        raise
+    except Exception:
+        # 視窗只顯示一行錯誤；完整的經過寫進紀錄檔，才查得出是哪一步、哪一張出錯
+        if log.fh is None:
+            log.open(output_dir / "photons.log")
+        log(traceback.format_exc())
+        raise
     finally:
         log.close()
 
@@ -366,7 +375,8 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
             flux_ratio[id(f)] = 1.0
             continue
         try:
-            m, rms, si, ri = register(np.column_stack([f.stars.x, f.stars.y]), ref_xy)
+            m, rms, si, ri = register(np.column_stack([f.stars.x, f.stars.y]), ref_xy,
+                                      expected_scale=_expected_scale(f, ref, project))
         except RegistrationError as exc:
             f.reject("registration_failed")
             warnings.append(Msg("msg.reg_failed", name=f.name, error=exc))
@@ -413,6 +423,16 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
         out.append({"group": g, "frames": gframes, "master": master_path, "coverage": coverage,
                     "maps": map_paths, "dir": gdir, "bayer": bayer, "shape": shape, "norm_ref": nref})
     return out
+
+
+def _expected_scale(f: Frame, ref: Frame, project: Project) -> float | None:
+    """frame → 參考的預期縮放：同一套器材是 1；不同器材是像素尺度的比例（不知道就回傳 None）。"""
+    if f.train == ref.train:
+        return 1.0
+    a, b = project.trains.get(f.train), project.trains.get(ref.train)
+    if a and b and a.pixel_scale_arcsec and b.pixel_scale_arcsec:
+        return a.pixel_scale_arcsec / b.pixel_scale_arcsec
+    return None
 
 
 def _grid_train(ag: AlignGroup, project: Project, s: Settings) -> str:
