@@ -51,11 +51,11 @@ def load_recipe(path: Path, reproduce: bool = False, base: Settings | None = Non
         s.filter_aliases = dict(doc["filter_aliases"])
     out = LoadedRecipe(settings=s, reproducible=schema == RECIPE_SCHEMA)
     if not reproduce:
-        s.kinds, s.calib_overrides, s.reference = {}, {}, None
+        s.kinds, s.calib_overrides, s.file_calib, s.reference = {}, {}, {}, None
         return out
     if schema != RECIPE_SCHEMA:
         out.warnings.append(Msg("msg.recipe_v1_settings_only"))
-        s.kinds, s.calib_overrides, s.reference = {}, {}, None
+        s.kinds, s.calib_overrides, s.file_calib, s.reference = {}, {}, {}, None
         return out
     for item in doc.get("inputs", []):
         p = Path(item["file"])

@@ -31,7 +31,7 @@ from .calibration import ALGO_VERSION as CALIB_VERSION, MasterBuilder
 from .drizzle import DrizzleSpec
 from .imageio import cfa_masks, row_order, write_fits
 from .i18n import Msg
-from .ingest import filter_names, ingest, safe_name
+from .ingest import filter_names, ingest, safe_name, unused_text
 from .integrate import BandSpec, FrameJob
 from .model import ACCEPTED, AlignGroup, Frame, IntegrationGroup, Project
 from .prepare import prepare
@@ -71,7 +71,8 @@ class Settings:
     flat_any_night: bool = False       # 這晚沒有 flat 時改用日期最近那晚的（預設由使用者逐組選）
     kinds: dict = field(default_factory=dict)            # {檔案路徑: 類型}，使用者指定
     filter_aliases: dict = field(default_factory=dict)   # {header 裡的寫法: 歸併到的名稱}
-    calib_overrides: dict = field(default_factory=dict)  # {校正組 key: {"dark"/"bias"/"flat": set id 或 None}}
+    calib_overrides: dict = field(default_factory=dict)  # {校正組 key: {"dark"/"bias"/"flat"/"flat_sub": set id 或 None}}
+    file_calib: dict = field(default_factory=dict)       # {light 路徑: {同上}}，使用者選幾張 light 指定校正檔
     merge_trains: list = field(default_factory=list)     # [[光學系統 id, …], …] 合併成同一對齊組
     grid_train: dict = field(default_factory=dict)       # {對齊組 id: 光學系統 id} 合併時的參考網格
     align_output: dict = field(default_factory=dict)     # {對齊組 id: {ALIGN_OUTPUT_KEYS 的子集}}
@@ -199,7 +200,7 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
     # ---- Stage 0 ----
     project = ingest(inputs, warnings, kinds=s.kinds, filter_aliases=s.filter_aliases,
                      temp_tolerance=s.temp_tolerance, split_nights=s.split_nights, overrides=s.calib_overrides,
-                     flat_any_night=s.flat_any_night,
+                     flat_any_night=s.flat_any_night, file_calib=s.file_calib,
                      merge_trains=s.merge_trains, name=safe_name(s.target) if s.target else None)
     log.open(output_dir / f"{project.name}.log")
     if s.preview:
@@ -230,6 +231,8 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
         entry = project.calib_groups[gk]
         log(Msg("msg.calib_group", group=gk, n=len(frames), dark=entry["dark"] or "—", bias=entry["bias"] or "—",
                 flat=entry["flat"] or "—"))
+        if entry["flat"]:
+            log(Msg("msg.calib_group_flat_sub", sub=entry["flat_sub"] or "—"))
         masters = builder.masters(entry, frames[0].bayer, frames[0].shape)
         report("masters")
         sig = _calib_signature(entry, project)
@@ -304,6 +307,10 @@ def _log_plan(project: Project, log) -> None:
     for alias, spellings in filter_names(project).items():
         if len(spellings) > 1:
             log(Msg("msg.filter_merged", name=alias, spellings=" / ".join(spellings)))
+    # 沒用到的校正檔只寫進紀錄（不是警告）：整包校正檔庫丟進來時多半有很多套用不到
+    for sid, cs in project.calibration_sets.items():
+        if not cs.used_by:
+            log(Msg("msg.set_unused", set=sid, n=len(cs.frames), reason=unused_text(cs)))
 
 
 def _calib_signature(entry: dict, project: Project) -> str:

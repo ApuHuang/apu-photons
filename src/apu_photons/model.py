@@ -146,6 +146,7 @@ class CalibrationSet:
     conditions: dict
     used_by: set = field(default_factory=set)   # 用到它的 light 校正組
     unused_reason: str | None = None
+    unused_detail: dict = field(default_factory=dict)  # 原因的參數（例如沒有哪個濾鏡的 light）
 
     @property
     def paths(self) -> list[Path]:
@@ -154,7 +155,7 @@ class CalibrationSet:
     def summary(self) -> dict:
         return {"id": self.id, "kind": self.kind, "is_master": self.is_master, "conditions": self.conditions,
                 "files": [{"file": str(f.path), "sha256": f.hash} for f in self.frames],
-                "used": bool(self.used_by), "unused_reason": self.unused_reason}
+                "used": bool(self.used_by), "unused_reason": self.unused_reason, "unused_detail": self.unused_detail}
 
 
 @dataclass

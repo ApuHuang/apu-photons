@@ -198,3 +198,62 @@ def test_register_rejects_implausible_scale():
     noise = np.random.default_rng(3).uniform(0, [synth.W, synth.H], (60, 2))
     with pytest.raises(RegistrationError):
         register(noise, ref)                         # 沒有星點的影像（例如 flat）配不上
+
+
+def test_flat_filter_must_match_exactly(tmp_path):
+    """light 沒有 FILTER（沒有濾鏡輪的軟體不寫）時，不能配到任意一個有濾鏡的 flat；兩邊都沒有才配。"""
+    cam = {k: v for k, v in CAM.items()}
+    for i, (tx, ty, rot) in enumerate(SHIFTS):
+        synth.write(tmp_path / "LIGHT" / f"L_{i}.fits", synth.render(tx, ty, rot, seed=i), IMAGETYP="LIGHT",
+                    EXPTIME=300.0, DATE_OBS=f"2026-09-20T14:{i:02d}:00", **cam)
+    _flats(tmp_path / "FLAT", "Ha", night=20)
+    warnings = []
+    project = ingest([tmp_path / "LIGHT", tmp_path / "FLAT"], warnings)
+    g = next(iter(project.calib_groups.values()))
+    assert g["flat"] is None
+    flat = next(iter(project.calibration_sets.values()))
+    assert flat.unused_reason == "no_light_filter" and flat.unused_detail == {"filter": "Ha"}
+    # 沒用到的校正檔只是資訊，不列在警告裡
+    assert not any("沒有用到" in str(w) for w in warnings)
+    # flat 也沒有濾鏡：配得到
+    for f in (tmp_path / "FLAT").iterdir():
+        with fits.open(f, mode="update") as h:
+            del h[0].header["FILTER"]
+    project = ingest([tmp_path / "LIGHT", tmp_path / "FLAT"], [])
+    assert next(iter(project.calib_groups.values()))["flat"] is not None
+
+
+def test_flat_sub_choice_file_assignment_and_unused_reasons(tmp_path):
+    """校正分頁改 flat 要扣哪一套；檔案分頁對個別 light 指定校正檔；沒用到的校正檔寫出具體原因。"""
+    _lights(tmp_path / "LIGHT", "Ha", night=20)
+    _flats(tmp_path / "FLAT", "Ha", night=20)
+    _flats(tmp_path / "FLAT", "OIII", night=20)          # 沒有 OIII 的 light
+    _darks(tmp_path / "DARK", 300.0)
+    _darks(tmp_path / "DARK", 1.0)                       # flat 的曝光：自動當 flat-dark
+    _darks(tmp_path / "DARK", 0.5)                       # 沒有 0.5 秒的 light 或 flat
+    for i in range(3):
+        synth.write(tmp_path / "BIAS" / f"B_{i}.fits", np.full((synth.H, synth.W), synth.PEDESTAL, np.float32),
+                    IMAGETYP="BIAS", EXPTIME=0.0001, **CAM)
+    inputs = [tmp_path / d for d in ("LIGHT", "FLAT", "DARK", "BIAS")]
+    project = ingest(inputs, [])
+    gk, g = next(iter(project.calib_groups.items()))
+    sets = project.calibration_sets
+    assert sets[g["flat_sub"]].kind == "dark" and sets[g["flat_sub"]].conditions["exptime"] == 1.0
+    bias = next(sid for sid, cs in sets.items() if cs.kind == "bias")
+    reasons = {cs.conditions.get("exptime"): (cs.unused_reason, cs.unused_detail)
+               for cs in sets.values() if cs.kind == "dark" and not cs.used_by}
+    assert reasons == {0.5: ("no_exposure", {"exp": "0.5"})}
+    oiii = next(cs for cs in sets.values() if cs.kind == "flat" and cs.unused_reason)
+    assert oiii.unused_detail == {"filter": "OIII"}
+
+    # A：flat 改扣 bias
+    project = ingest(inputs, [], overrides={gk: {"flat_sub": bias}})
+    g = project.calib_groups[gk]
+    assert g["flat_sub"] == bias and g["source"] == "user" and project.calibration_sets[bias].used_by
+    # B：其中 2 張 light 指定「不用 flat」，自成一組；其他照自動
+    lights = sorted((tmp_path / "LIGHT").iterdir())
+    project = ingest(inputs, [], file_calib={str(p): {"flat": None} for p in lights[:2]})
+    manual = [g for g in project.calib_groups.values() if g["manual"]]
+    assert len(manual) == 1 and len(manual[0]["frames"]) == 2 and manual[0]["flat"] is None
+    auto = [g for g in project.calib_groups.values() if not g["manual"]]
+    assert len(auto) == 1 and len(auto[0]["frames"]) == len(SHIFTS) - 2 and auto[0]["flat"]

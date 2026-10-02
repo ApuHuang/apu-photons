@@ -277,3 +277,28 @@ def test_load_recipe(app, tmp_path):
     assert len(app.files) == 8 and app.target_var.get() == "R"
     app.wait_plan()
     assert app._reference == [res.project.align_groups[0].reference.name]
+
+
+def test_assign_calibration_and_flat_sub(app, tmp_path):
+    """檔案分頁：選幾張 light 指定校正檔；校正分頁：改 flat 要扣哪一套。"""
+    light, inputs = _make(tmp_path)
+    app.add_files(inputs)
+    app.wait_plan()
+    chosen = sorted(f.path for f in app.plan.lights)[:3]
+    app.assign_calibration(chosen, {"flat": None})
+    app.wait_plan()
+    manual = [g for g in app.plan.calib_groups.values() if g["manual"]]
+    assert len(manual) == 1 and len(manual[0]["frames"]) == 3 and manual[0]["flat"] is None
+    assert app.settings().file_calib == {str(p): {"flat": None} for p in chosen}
+    app.assign_calibration(chosen, None)
+    app.wait_plan()
+    assert not any(g["manual"] for g in app.plan.calib_groups.values())
+    # flat 改成不扣（沒有 flat-dark 時本來就沒有可扣的；選「不使用」照樣記下來）
+    gk = next(iter(app.plan.calib_groups))
+    app.cal_tree.selection_set(f"g:{gk}")
+    app._fill_cal_editor()
+    assert str(app.cal_combos["flat_sub"].cget("state")) != "disabled"
+    app.cal_combos["flat_sub"].set(gui.tr("gui.cal.none_option"))
+    app._cal_combo_selected("flat_sub")
+    app.wait_plan()
+    assert app.plan.calib_groups[gk]["flat_sub"] is None and app.plan.calib_groups[gk]["source"] == "user"

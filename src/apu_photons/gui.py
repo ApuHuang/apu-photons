@@ -29,7 +29,7 @@ from .darkroom import (Darkroom, Fonts, MetricRow, PanelGroup, ParameterSlider, 
 from .engine import ALIGN_OUTPUT_KEYS, Cancelled, Result, Settings, run
 from .i18n import APP_NAME, LANGUAGES, get_language, set_language, tr
 from .imageio import IMAGE_SUFFIXES
-from .ingest import expand_inputs, filter_names, ingest
+from .ingest import SUB_KINDS, expand_inputs, filter_names, ingest, unused_text
 from .model import KINDS, UNKNOWN, Project
 from .recipe import RecipeError, load_recipe
 from .settings import load_settings, save_settings
@@ -88,7 +88,8 @@ class PhotonsView(tk.Frame):
         self.show_language = show_language
         self.files: list[Path] = []
         self.kinds: dict[str, str] = {}             # 使用者指定的類型
-        self.calib_overrides: dict[str, dict] = {}  # 使用者改的校正配對
+        self.calib_overrides: dict[str, dict] = {}  # 使用者改的校正配對（校正分頁，每組）
+        self.file_calib: dict[str, dict] = {}       # 使用者對個別 light 指定的校正檔（檔案分頁）
         self.align_output: dict[str, dict] = {}     # 每個對齊組自己的輸出設定
         self.plan: Project | None = None
         self.plan_warnings: list = []
@@ -434,6 +435,9 @@ class PhotonsView(tk.Frame):
         self.filters_btn = ttk.Button(top, text=tr("gui.btn.filters"), style="Dark.TButton",
                                       command=self._edit_filters)
         self.filters_btn.pack(side="right", padx=(0, self.px(6)))
+        self.assign_btn = ttk.Button(top, text=tr("gui.btn.assign"), style="Dark.TButton",
+                                     command=self._assign_calibration)
+        self.assign_btn.pack(side="right", padx=(0, self.px(6)))
         if not IS_MAC:  # Mac 在選單列「檔案」裡；Windows 不放選單列（原生選單列沒辦法變深色）
             self.recipe_btn = ttk.Button(top, text=tr("gui.btn.load_recipe"), style="Dark.TButton",
                                          command=self.ask_load_recipe)
@@ -471,10 +475,14 @@ class PhotonsView(tk.Frame):
         pane.pack(fill="both", expand=True)
         upper = tk.Frame(pane, bg=D.canvas)
         lower = tk.Frame(pane, bg=D.canvas)
-        pane.add(upper, stretch="always")
-        pane.add(lower, stretch="always")
+        pane.add(upper, stretch="always", minsize=self.px(240))
+        pane.add(lower, stretch="always", minsize=self.px(120))
         cols = [("n", "gui.col.count", 46, "e"), ("dark", "kind.dark", 180, "w"), ("bias", "kind.bias", 140, "w"),
-                ("source", "gui.col.source", 56, "center"), ("flat", "kind.flat", 200, "w")]
+                ("source", "gui.col.source", 64, "center"), ("flat", "kind.flat", 200, "w"),
+                ("flat_sub", "gui.col.flat_sub", 170, "w")]
+        # 編輯列先排在下面，表格再填滿剩下的空間；不然視窗矮時編輯列會被擠掉
+        editor = tk.Frame(upper, bg=D.panel, padx=self.px(12), pady=self.px(8))
+        editor.pack(side="bottom", fill="x")
         cal_holder = tk.Frame(upper, bg=D.canvas)
         cal_holder.pack(fill="both", expand=True)
         self.cal_tree = ttk.Treeview(cal_holder, columns=[c[0] for c in cols], show="tree headings",
@@ -484,27 +492,28 @@ class PhotonsView(tk.Frame):
         for key, label, width, anchor in cols:
             self.cal_tree.heading(key, text=tr(label), anchor=anchor)
             self.cal_tree.column(key, width=self.px(width), minwidth=self.px(40), anchor=anchor,
-                                 stretch=key == "flat")
+                                 stretch=key == "flat_sub")
         self.cal_tree.tag_configure("missing", foreground=D.beta)
         self.cal_tree.tag_configure("user", foreground=D.accent)
         self._scrolled(cal_holder, self.cal_tree)
         self.cal_tree.bind("<<TreeviewSelect>>", lambda _e: self._fill_cal_editor())
-        editor = tk.Frame(upper, bg=D.panel, padx=self.px(12), pady=self.px(8))
-        editor.pack(fill="x")
         self.cal_editor_title = tk.Label(editor, font=self.fonts.small, fg=D.secondary, bg=D.panel, anchor="w")
-        self.cal_editor_title.grid(row=0, column=0, columnspan=7, sticky="w", pady=(0, self.px(4)))
+        self.cal_editor_title.grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, self.px(4)))
         self.cal_combos: dict[str, ttk.Combobox] = {}
-        for i, kind in enumerate(("dark", "bias", "flat")):
-            tk.Label(editor, text=tr(f"kind.{kind}"), font=self.fonts.ui, fg=D.label, bg=D.panel).grid(
-                row=1, column=2 * i, sticky="w", padx=(0 if i == 0 else self.px(12), self.px(4)))
-            cb = ttk.Combobox(editor, state="readonly", style="Dark.TCombobox", font=self.fonts.small, width=24)
-            cb.grid(row=1, column=2 * i + 1, sticky="ew")
+        # 兩列兩欄：dark、bias ／ flat、flat 扣除
+        for i, kind in enumerate(("dark", "bias", "flat", "flat_sub")):
+            row, col = 1 + i // 2, (i % 2) * 2
+            text = tr("gui.cal.flat_sub") if kind == "flat_sub" else tr(f"kind.{kind}")
+            tk.Label(editor, text=text, font=self.fonts.ui, fg=D.label, bg=D.panel).grid(
+                row=row, column=col, sticky="w", padx=(0 if col == 0 else self.px(12), self.px(4)), pady=self.px(2))
+            cb = ttk.Combobox(editor, state="readonly", style="Dark.TCombobox", font=self.fonts.small, width=30)
+            cb.grid(row=row, column=col + 1, sticky="ew", pady=self.px(2))
             cb.bind("<<ComboboxSelected>>", lambda _e, k=kind: self._cal_combo_selected(k))
             self.cal_combos[kind] = cb
-            editor.columnconfigure(2 * i + 1, weight=1)
+            editor.columnconfigure(col + 1, weight=1)
         self.cal_reset_btn = ttk.Button(editor, text=tr("gui.btn.auto"), style="Dark.TButton",
                                         command=self._cal_reset)
-        self.cal_reset_btn.grid(row=1, column=6, padx=(self.px(12), 0))
+        self.cal_reset_btn.grid(row=1, column=4, rowspan=2, padx=(self.px(12), 0))
         top2 = self._toolbar(lower)
         tk.Label(top2, text=tr("gui.cal.sets"), font=self.fonts.bold, fg=D.label, bg=D.chrome).pack(
             side="left", padx=self.px(12), pady=self.px(6))
@@ -811,6 +820,7 @@ class PhotonsView(tk.Frame):
                     temp_tolerance=float(self.temp_tol_var.get()), split_nights=bool(self.split_nights_var.get()),
                     flat_any_night=bool(self.flat_any_night_var.get()),
                     overrides=json.loads(json.dumps(self.calib_overrides)), merge_trains=self._merge_trains(),
+                    file_calib=json.loads(json.dumps(self.file_calib)),
                     name=None)
 
     def _merge_trains(self) -> list[list[str]]:
@@ -848,6 +858,76 @@ class PhotonsView(tk.Frame):
 
     # ------------------------------------------------------------------ 校正配對
 
+    def _selected_lights(self) -> list[Path]:
+        lights = {str(f.path) for f in self.plan.lights} if self.plan is not None else set()
+        return [p for p in self._selected_files() if str(p) in lights]
+
+    def assign_calibration(self, paths: list[Path], assignment: dict | None) -> None:
+        """指定這些 light 用哪些校正檔：{kind: set id 或 None（不使用）}，沒寫的照自動；assignment=None 取消指定。"""
+        for p in paths:
+            if assignment:
+                self.file_calib[str(p)] = dict(assignment)
+            else:
+                self.file_calib.pop(str(p), None)
+        self.result = None
+        self._schedule_plan()
+
+    def _assign_calibration(self) -> None:
+        """檔案分頁「指定校正檔…」：選取的 light 改用指定的 dark / bias / flat / flat 扣除。"""
+        if self.plan is None or self.is_busy():
+            return
+        paths = self._selected_lights()
+        if not paths:
+            messagebox.showinfo(APP_NAME, tr("gui.assign.no_lights"), parent=self.root)
+            return
+        D = Darkroom
+        sets = self.plan.calibration_sets
+        auto, none = tr("gui.assign.auto"), tr("gui.cal.none_option")
+        current = [self.file_calib.get(str(p), {}) for p in paths]
+        same = current[0] if all(c == current[0] for c in current) else {}
+        top = tk.Toplevel(self.root)
+        top.title(tr("gui.assign.title"))
+        top.configure(bg=D.panel)
+        top.transient(self.root)
+        tk.Label(top, text=tr("gui.assign.help", n=len(paths)), font=self.fonts.small, fg=D.secondary, bg=D.panel,
+                 justify="left", wraplength=self.px(460)).grid(row=0, column=0, columnspan=2, sticky="w",
+                                                               padx=self.px(14), pady=(self.px(12), self.px(8)))
+        combos = {}
+        for i, kind in enumerate(("dark", "bias", "flat", "flat_sub"), start=1):
+            allowed = SUB_KINDS if kind == "flat_sub" else (kind,)
+            ids = [sid for sid, cs in sets.items() if cs.kind in allowed]
+            text = tr("gui.cal.flat_sub") if kind == "flat_sub" else tr(f"kind.{kind}")
+            tk.Label(top, text=text, font=self.fonts.ui, fg=D.label, bg=D.panel).grid(
+                row=i, column=0, sticky="w", padx=self.px(14), pady=self.px(3))
+            cb = ttk.Combobox(top, state="readonly", values=[auto, none] + ids, style="Dark.TCombobox",
+                              font=self.fonts.small, width=36)
+            value = same.get(kind, "auto")
+            cb.set(auto if value == "auto" else (none if value is None else value))
+            cb.grid(row=i, column=1, sticky="ew", padx=self.px(14), pady=self.px(3))
+            combos[kind] = cb
+
+        def ok() -> None:
+            assignment = {}
+            for kind, cb in combos.items():
+                v = cb.get()
+                if v != auto:
+                    assignment[kind] = None if v == none else v
+            top.destroy()
+            self.assign_calibration(paths, assignment or None)
+
+        def clear() -> None:
+            top.destroy()
+            self.assign_calibration(paths, None)
+
+        row = tk.Frame(top, bg=D.panel)
+        row.grid(row=6, column=0, columnspan=2, sticky="e", padx=self.px(14), pady=self.px(12))
+        ttk.Button(row, text=tr("gui.btn.cancel"), style="Dark.TButton", command=top.destroy).pack(side="right")
+        ttk.Button(row, text=tr("gui.assign.clear"), style="Dark.TButton", command=clear).pack(
+            side="right", padx=(0, self.px(6)))
+        ttk.Button(row, text=tr("gui.btn.ok"), style="Prominent.TButton", command=ok).pack(
+            side="right", padx=(0, self.px(6)))
+        dark_title_bar(top)
+
     def _fill_cal_editor(self) -> None:
         sel = self.cal_tree.selection()
         project = self.plan
@@ -862,11 +942,16 @@ class PhotonsView(tk.Frame):
         g = project.calib_groups[gk]
         self.cal_editor_title.configure(text=gk)
         none = tr("gui.cal.none_option")
+        master_flat = bool(g["flat"]) and project.calibration_sets[g["flat"]].is_master
         for kind, cb in self.cal_combos.items():
-            ids = [sid for sid, s in project.calibration_sets.items() if s.kind == kind]
+            allowed = SUB_KINDS if kind == "flat_sub" else (kind,)
+            ids = [sid for sid, s in project.calibration_sets.items() if s.kind in allowed]
             cb.configure(values=[none] + ids)
             cb.set(g.get(kind) or none)
-            cb.state(["!disabled"] if not self.is_busy() else ["disabled"])
+            enabled = not self.is_busy() and not (kind == "flat_sub" and (master_flat or not g["flat"]))
+            cb.state(["!disabled"] if enabled else ["disabled"])
+            if kind == "flat_sub" and master_flat:
+                cb.set(tr("gui.cal.flat_sub_master"))
         self.cal_reset_btn.state(["!disabled"] if gk in self.calib_overrides and not self.is_busy() else ["disabled"])
 
     def _cal_combo_selected(self, kind: str) -> None:
@@ -922,6 +1007,7 @@ class PhotonsView(tk.Frame):
             target=self.target_var.get().strip() or None, temp_tolerance=float(self.temp_tol_var.get()),
             kinds=dict(self.kinds), filter_aliases=dict(self.filter_aliases),
             calib_overrides=json.loads(json.dumps(self.calib_overrides)), merge_trains=merge,
+            file_calib=json.loads(json.dumps(self.file_calib)),
             grid_train=grid, align_output=align_output)
 
     def output_dir(self, trial: bool = False) -> Path:
@@ -1052,6 +1138,7 @@ class PhotonsView(tk.Frame):
             self.files = list(rec.files)
             self.kinds = dict(s.kinds)
             self.calib_overrides = dict(s.calib_overrides)
+            self.file_calib = dict(s.file_calib)
             self.target_var.set(s.target or "")
             self._reference = s.reference
         self.result = None
@@ -1263,7 +1350,7 @@ class PhotonsView(tk.Frame):
         self.trial_btn.state(["!disabled"] if ready and not busy else ["disabled"])
         for btn in (self.add_btn, self.output_btn):
             btn.state(["disabled"] if busy else ["!disabled"])
-        for btn in (self.remove_btn, self.filters_btn):
+        for btn in (self.remove_btn, self.filters_btn, self.assign_btn):
             btn.state(["disabled"] if busy or not self.files else ["!disabled"])
         self.kind_btn.state(["disabled"] if busy or not self.files else ["!disabled"])
         out = self.output_dir_var.get()
@@ -1417,17 +1504,19 @@ class PhotonsView(tk.Frame):
             return
         missing_flat = 0
         for gk, g in p.calib_groups.items():
-            src = tr("gui.cal.source.user") if g["source"] == "user" else tr("gui.cal.source.auto")
+            src = (tr("gui.cal.manual") if g.get("manual") else
+                   tr("gui.cal.source.user") if g["source"] == "user" else tr("gui.cal.source.auto"))
             none = tr("gui.cal.none_short")
             flat = g["flat"] or (tr("gui.cal.flat_other") if g["flat_other_nights"] else none)
             if not g["flat"]:
                 missing_flat += 1
             bias = g["bias"] or (tr("gui.cal.bias_not_needed") if g["dark"] else none)
             tags = ("user",) if g["source"] == "user" else (("missing",) if not g["flat"] or not g["dark"] else ())
+            sub = g["flat_sub"] or (none if g["flat"] else "")
             self.cal_tree.insert("", "end", iid=f"g:{gk}", text=gk,
-                                 values=(len(g["frames"]), g["dark"] or none, bias, src, flat), tags=tags)
+                                 values=(len(g["frames"]), g["dark"] or none, bias, src, flat, sub), tags=tags)
         for sid, s in p.calibration_sets.items():
-            status = tr("gui.cal.used", n=len(s.used_by)) if s.used_by else tr(f"msg.unused.{s.unused_reason}")
+            status = tr("gui.cal.used", n=len(s.used_by)) if s.used_by else str(unused_text(s))
             self.set_tree.insert("", "end", text=sid, values=(tr(f"kind.{s.kind}"), len(s.frames),
                                                               "★" if s.is_master else "", status),
                                  tags=() if s.used_by else ("unused",))

@@ -6,6 +6,7 @@ header 的 IMAGETYP、檔名、上層資料夾名稱判斷；判斷不出來的�
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -389,6 +390,9 @@ def _rank(cands: list[CalibrationSet], want: dict, date: str | None, temp: float
                 same = _exp_same(val, c.get(key))
             elif key == "camera":
                 same = _camera_same(val, c.get(key))
+            elif key == "filter":
+                # 一邊有濾鏡、一邊沒有時不能當成「不確定」：沒有濾鏡輪的軟體不寫 FILTER，會配到任意一個濾鏡的 flat
+                same = val == c.get(key)
             else:
                 same = _same(val, c.get(key))
             if same is None:
@@ -417,19 +421,44 @@ def light_group_key(f: Frame) -> str:
             f"offset {_fmt(f.offset)} | {_fmt(t)}°C")
 
 
+SUB_KINDS = ("flat_dark", "dark", "bias")  # flat 可以扣的校正檔
+AUTO = "auto"
+
+
+def path_key(path) -> str:
+    return str(Path(path).resolve()).casefold()
+
+
 def match_calibration(project: Project, warnings: list, temp_tolerance: float = 2.0,
-                      overrides: dict[str, dict] | None = None, flat_any_night: bool = False) -> None:
+                      overrides: dict[str, dict] | None = None, flat_any_night: bool = False,
+                      file_calib: dict[str, dict] | None = None) -> None:
     """每張 light 配 dark / bias / flat，每套 flat 配 flat-dark（或曝光相同的 dark、或 bias）。結果寫進
-    Frame.calib 與 project.calib_groups；沒用到的校正檔標上原因。overrides：{校正組 key: {kind: set id 或 None}}。
+    Frame.calib 與 project.calib_groups；沒用到的校正檔標上原因（只是資訊，不列為警告）。
+
+    使用者的指定，後面的優先：
+    - file_calib：{light 路徑: {kind: set id 或 None}}，在檔案分頁選幾張 light「指定校正檔」；指定內容相同的 light 自成一組
+    - overrides：{校正組 key: {kind: set id 或 None}}，在校正分頁逐組改
+    kind 是 dark / bias / flat / flat_sub（flat 要扣的 flat-dark、dark 或 bias）；None＝不使用；沒寫＝自動。
     flat_any_night：這晚沒有 flat 時，改用日期最接近那晚的（使用者開啟才會；預設由使用者逐組選）。"""
     sets = project.calibration_sets
     by_kind: dict[str, list[CalibrationSet]] = defaultdict(list)
     for s in sets.values():
         by_kind[s.kind].append(s)
+    fc = {path_key(k): v for k, v in (file_calib or {}).items() if v}
     groups: dict[str, list[Frame]] = defaultdict(list)
+    manual_of: dict[str, dict] = {}
+    manual_ids: dict[str, int] = {}
     for f in project.lights:
-        if f.accepted:
-            groups[light_group_key(f)].append(f)
+        if not f.accepted:
+            continue
+        gk = light_group_key(f)
+        assigned = fc.get(path_key(f.path))
+        if assigned:
+            sig = json.dumps(assigned, sort_keys=True)
+            manual_ids.setdefault(sig, len(manual_ids) + 1)
+            gk = f"{gk} | manual {manual_ids[sig]}"
+            manual_of[gk] = assigned
+        groups[gk].append(f)
 
     flat_sub: dict[str, str | None] = {}
 
@@ -455,12 +484,20 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
         flat_sub[flat.id] = sid
         return sid
 
+    def valid(kind: str, sid) -> bool:
+        if sid is None:
+            return True
+        allowed = SUB_KINDS if kind == "flat_sub" else (kind,)
+        return sid in sets and sets[sid].kind in allowed
+
+    temp_far: set[str] = set()
     calib_groups: dict[str, dict] = {}
     for gk, frames in sorted(groups.items()):
         f = frames[0]
         base = {"camera": f.camera, "gain": f.gain, "offset": f.offset}
         dark_hit, dark_far = _rank(by_kind["dark"], {**base, "exptime": f.exposure}, f.date_obs, f.temp,
                                    temp_tolerance)
+        temp_far.update(s.id for s in dark_far)
         bias_hit, _ = _rank(by_kind["bias"], base, f.date_obs, None, temp_tolerance)
         flat_want = {"camera": f.camera, "filter": filter_key(f.filter), "focal_mm": _focal(f),
                      "night": None if f.night == "unknown" else f.night}
@@ -476,20 +513,27 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
         if auto["flat"] is None and other_night and flat_any_night:
             borrowed = other_night[0]
             auto["flat"] = borrowed.id
-        chosen, source = dict(auto), "auto"
-        if overrides and gk in overrides:
-            for kind, sid in overrides[gk].items():
-                if kind in chosen and (sid is None or sid in sets):
-                    chosen[kind] = sid
-                    source = "user"
-        if chosen["dark"] is None and dark_far:
+        chosen, explicit = dict(auto), {}
+        for layer in (manual_of.get(gk), (overrides or {}).get(gk)):
+            for kind, sid in (layer or {}).items():
+                if kind in ("dark", "bias", "flat", "flat_sub") and sid != AUTO and valid(kind, sid):
+                    explicit[kind] = sid
+        chosen.update({k: v for k, v in explicit.items() if k != "flat_sub"})
+        source = "user" if explicit else "auto"
+        if chosen["dark"] is None and dark_far and "dark" not in explicit:
             warnings.append(Msg("msg.dark_temp_far", group=gk, set=dark_far[0].id,
                                 temp=_fmt(dark_far[0].conditions.get("temp_mean")), tol=_fmt(temp_tolerance)))
-        if chosen["dark"]:
-            chosen["bias"] = chosen["bias"] if source == "user" and overrides[gk].get("bias") else None
-        sub = sub_for(sets[chosen["flat"]]) if chosen["flat"] else None
-        entry = {**chosen, "flat_sub": sub, "source": source, "frames": frames,
-                 "flat_other_nights": [s.id for s in other_night],
+        if chosen["dark"] and "bias" not in explicit:
+            chosen["bias"] = None  # dark 已含偏壓
+        flat = sets[chosen["flat"]] if chosen["flat"] else None
+        if flat is None or flat.is_master:
+            sub = None  # 做好的 master flat 視為已扣過
+        elif "flat_sub" in explicit:
+            sub = explicit["flat_sub"]
+        else:
+            sub = sub_for(flat)
+        entry = {**chosen, "flat_sub": sub, "source": source, "frames": frames, "manual": gk in manual_of,
+                 "explicit": sorted(explicit), "flat_other_nights": [s.id for s in other_night],
                  "candidates": {"dark": [s.id for s in dark_hit], "bias": [s.id for s in bias_hit],
                                 "flat": [s.id for s in flat_hit] + [s.id for s in other_night]}}
         calib_groups[gk] = entry
@@ -506,23 +550,49 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
         if borrowed is not None and chosen["flat"] == borrowed.id:
             warnings.append(Msg("msg.group_flat_other_night", group=gk, n=len(frames), set=borrowed.id,
                                 night=borrowed.conditions.get("night") or "?"))
-        if not chosen["flat"]:
+        if not chosen["flat"] and "flat" not in explicit:
             if other_night:
                 warnings.append(Msg("msg.group_no_flat_night", group=gk, n=len(frames), night=f.night))
             else:
                 warnings.append(Msg("msg.group_no_flat", group=gk, n=len(frames)))
     project.calib_groups = calib_groups
+    _unused_reasons(project, by_kind, temp_far)
 
-    for s in sets.values():
+
+def unused_text(s: CalibrationSet) -> Msg:
+    """沒用到的原因，依目前語言顯示。"""
+    return Msg(f"msg.unused.{s.unused_reason or 'no_match'}", **(s.unused_detail or {}))
+
+
+def _unused_reasons(project: Project, by_kind: dict, temp_far: set) -> None:
+    """沒用到的校正檔：寫下具體原因（資訊，不是警告；整包校正檔庫丟進來時多半有很多套用不到）。"""
+    lights = [f for f in project.lights if f.accepted]
+    light_filters = {(f.camera, filter_key(f.filter)) for f in lights}
+    light_exps = [(f.camera, f.exposure) for f in lights]
+    used_flats = [s for s in by_kind["flat"] if s.used_by]
+    flat_exps = [(s.conditions.get("camera"), s.conditions.get("exptime")) for s in used_flats]
+    groups = project.calib_groups.values()
+    for s in project.calibration_sets.values():
         if s.used_by:
             continue
-        if s.kind == "bias" and any(s.id in g["candidates"]["bias"] for g in calib_groups.values()):
-            s.unused_reason = "dark_present"
-        elif s.kind in ("dark", "flat_dark") and not by_kind["flat"]:
-            s.unused_reason = "no_match_no_flat"
+        c = s.conditions
+        detail: dict = {}
+        if s.kind == "bias" and any(s.id in g["candidates"]["bias"] for g in groups):
+            code = "dark_present"
+        elif s.kind == "flat" and not any(_camera_same(c.get("camera"), cam) is not False and fk == c.get("filter")
+                                          for cam, fk in light_filters):
+            code, detail = "no_light_filter", {"filter": s.frames[0].filter or "—"}
+        elif s.kind == "flat" and any(s.id in g["flat_other_nights"] for g in groups):
+            code, detail = "other_night", {"night": c.get("night") or "?"}
+        elif s.kind in ("dark", "flat_dark") and s.id in temp_far:
+            code = "temp"
+        elif s.kind in ("dark", "flat_dark") and not any(
+                _camera_same(c.get("camera"), cam) is not False and _exp_same(c.get("exptime"), exp)
+                for cam, exp in light_exps + flat_exps):
+            code, detail = "no_exposure", {"exp": _fmt(c.get("exptime"))}
         else:
-            s.unused_reason = "no_match"
-        warnings.append(Msg("msg.set_unused", set=s.id, n=len(s.frames), reason=Msg(f"msg.unused.{s.unused_reason}")))
+            code = "no_match"
+        s.unused_reason, s.unused_detail = code, detail
 
 
 # ---------- 對齊組與整合組 ----------
@@ -593,9 +663,9 @@ def safe_name(name: str) -> str:
 def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filter_aliases: dict | None = None,
            temp_tolerance: float = 2.0, split_nights: bool = True, overrides: dict | None = None,
            merge_trains: list[list[str]] | None = None, name: str | None = None,
-           flat_any_night: bool = False) -> Project:
+           flat_any_night: bool = False, file_calib: dict | None = None) -> Project:
     """kinds：{路徑: 類型} 強制指定（使用者在介面上改的、或命令列 --dark 等）。"""
-    forced = {str(Path(k).resolve()).casefold(): v for k, v in (kinds or {}).items()}
+    forced = {path_key(k): v for k, v in (kinds or {}).items()}
     files = expand_inputs(paths)
     if not files:
         warnings.append(Msg("msg.no_input_files"))
@@ -608,7 +678,7 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
             f.reject("unreadable")
             warnings.append(Msg("msg.read_failed", name=p.name, error=exc))
         kind, source, is_master = classify(p, f.header)
-        user = forced.get(str(p.resolve()).casefold())
+        user = forced.get(path_key(p))
         if user:
             kind, source = user, "user"
         f.kind, f.kind_source, f.is_master = kind, source, is_master and kind != "light"
@@ -645,6 +715,6 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
 
     _check_rows(project, warnings)
     project.calibration_sets = build_sets([f for f in frames if f.kind in CAL_KINDS and f.accepted])
-    match_calibration(project, warnings, temp_tolerance, overrides, flat_any_night)
+    match_calibration(project, warnings, temp_tolerance, overrides, flat_any_night, file_calib)
     build_groups(project, merge_trains, warnings)
     return project

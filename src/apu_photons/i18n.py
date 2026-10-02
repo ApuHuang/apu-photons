@@ -814,4 +814,43 @@ _EN.update({
     'cli.flat_any_night': 'when a night has no flat, use the flat from the nearest night (by default it is only suggested)',
 })
 
+# 校正檔：flat-dark 的選擇、手動指定、沒用到的原因
+_ZH.update({
+    'msg.calib_group_flat_sub': '  flat 扣除：{sub}',
+    'msg.unused.no_light_filter': '沒有 {filter} 濾鏡的 light',
+    'msg.unused.other_night': '同濾鏡的 light 不是 {night} 這晚拍的（可以在校正分頁手動選用，或打開「沒有 flat 時用最近一晚的」）',
+    'msg.unused.temp': '溫度與 light 相差超過容許差距',
+    'msg.unused.no_exposure': '沒有 {exp} 秒的 light，也沒有要用的 {exp} 秒 flat',
+    'gui.col.flat_sub': 'Flat 扣除',
+    'gui.cal.flat_sub': 'Flat 扣除',
+    'gui.cal.flat_sub_master': '（做好的 master flat，不再扣）',
+    'gui.cal.manual': '手動指定',
+    'gui.btn.assign': '指定校正檔…',
+    'gui.assign.title': '指定校正檔',
+    'gui.assign.help': '這 {n} 張 light 改用下面選的校正檔（優先於自動配對）；選「自動」的項目照自動配對。'
+                       '指定內容相同的 light 會自成一個校正組，可以在校正分頁再看到。',
+    'gui.assign.auto': '（自動）',
+    'gui.assign.clear': '取消指定',
+    'gui.assign.no_lights': '請先在清單裡選取要指定的 light',
+})
+_EN.update({
+    'msg.calib_group_flat_sub': '  flat minus: {sub}',
+    'msg.unused.no_light_filter': 'no lights with the {filter} filter',
+    'msg.unused.other_night': 'the lights with this filter were not taken on {night} (choose it by hand in the Calibration tab, or turn on Use Nearest Night\'s Flat)',
+    'msg.unused.temp': 'temperature differs from the lights by more than the tolerance',
+    'msg.unused.no_exposure': 'no {exp} s lights and no {exp} s flats in use',
+    'gui.col.flat_sub': 'Flat Minus',
+    'gui.cal.flat_sub': 'Flat minus',
+    'gui.cal.flat_sub_master': '(prepared master flat; nothing subtracted)',
+    'gui.cal.manual': 'Manual',
+    'gui.btn.assign': 'Assign Calibration…',
+    'gui.assign.title': 'Assign Calibration',
+    'gui.assign.help': 'These {n} lights use the calibration chosen below (before automatic matching); items left on '
+                       'Auto are matched automatically. Lights with the same assignment form their own calibration '
+                       'group, shown in the Calibration tab.',
+    'gui.assign.auto': '(auto)',
+    'gui.assign.clear': 'Clear Assignment',
+    'gui.assign.no_lights': 'Select the lights to assign in the list first',
+})
+
 _CATALOG = {"zh": _ZH, "en": _EN}
