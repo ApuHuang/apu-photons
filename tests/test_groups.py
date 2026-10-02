@@ -125,6 +125,13 @@ def test_flat_per_night_and_user_choice(tmp_path):
                      overrides={key: {"flat": by_night["2026-09-20"]["flat"]}})
     g = project.calib_groups[key]
     assert g["flat"] == by_night["2026-09-20"]["flat"] and g["source"] == "user"
+    # 或一次套用：沒有 flat 的組改用最近一晚的（提醒用了哪一晚）
+    warnings = []
+    project = ingest([tmp_path / "LIGHT", tmp_path / "FLAT"], warnings, flat_any_night=True)
+    g = project.calib_groups[key]
+    assert g["flat"] == by_night["2026-09-20"]["flat"] and g["source"] == "auto"
+    assert any("2026-09-20" in str(w) and "改用" in str(w) for w in warnings)
+    assert not any("別晚" in str(w) for w in warnings)
 
 
 def test_prepared_masters(tmp_path):

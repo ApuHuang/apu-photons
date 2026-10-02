@@ -76,7 +76,7 @@ light 與校正檔一起給（檔案或資料夾；資料夾等同其中的影�
 判斷不出來的（例如相機 RAW 放在以目標命名的資料夾）用 `--light`、`--dark`、`--bias`、`--flat`、`--flat-dark` 指定
 （這些選項後面接多個路徑，請放在最後）。輸出到 `-o` 資料夾：每個整合組一個 master，例如 `M31_Ha.fits`、`M31_OIII.fits`。
 
-常用選項：`--lang en`（英文）、`--preview 20`（每組抽樣試跑）、`--target 名稱`、`--temp-tolerance 2`、
+常用選項：`--lang en`（英文）、`--preview 20`（每組抽樣試跑）、`--target 名稱`、`--temp-tolerance 2`、`--flat-any-night`（某晚沒有 flat 時用最近一晚的）、
 `--min-coverage 0.9`、`--no-crop`、`--filter-alias H-alpha=Ha`、`--merge "相機A @ 400mm,相機B @ 400mm"`、
 `--downsample`、`--rejection sigma`、`--reference 檔名`、`--memory 4096`、`--bits 16`。`apu-photons stack -h` 看全部。
 

@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--bits", type=int, choices=[16, 32], default=32, help=tr("cli.bits"))
     st.add_argument("--memory", type=int, default=2048, help=tr("cli.memory"))
     st.add_argument("--one-session", action="store_true", help=tr("cli.one_session"))
+    st.add_argument("--flat-any-night", action="store_true", help=tr("cli.flat_any_night"))
     st.add_argument("--no-rejection-maps", action="store_true", help=tr("cli.no_rejection_maps"))
     st.add_argument("--preview", type=int, default=0, metavar="N", help=tr("cli.preview"))
     st.add_argument("--cache", help=tr("cli.cache"))
@@ -95,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     s = Settings(rejection=a.rejection, low=a.low, high=a.high, weighting="none" if a.no_weights else "snr2_over_fwhm2",
                  pick_boost=a.pick_boost, reference=a.reference, downsample=0.5 if a.downsample else 1.0,
                  crop_common=not a.no_crop, output_bits=a.bits, memory_mb=a.memory, split_nights=not a.one_session,
+                 flat_any_night=a.flat_any_night,
                  keep_rejection_maps=not a.no_rejection_maps, preview=a.preview,
                  drizzle=a.drizzle, pixfrac=a.pixfrac, fill_holes=not a.no_fill_holes,
                  gpu=a.gpu, workers=a.workers, target=a.target, temp_tolerance=a.temp_tolerance,

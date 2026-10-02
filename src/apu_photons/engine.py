@@ -68,6 +68,7 @@ class Settings:
     # ---- 0.2：輸入與分組 ----
     target: str | None = None          # 輸出檔名用的目標名稱；None = light 的 OBJECT 或資料夾名稱
     temp_tolerance: float = 2.0        # dark 與 light 的溫度容許差距（°C）
+    flat_any_night: bool = False       # 這晚沒有 flat 時改用日期最近那晚的（預設由使用者逐組選）
     kinds: dict = field(default_factory=dict)            # {檔案路徑: 類型}，使用者指定
     filter_aliases: dict = field(default_factory=dict)   # {header 裡的寫法: 歸併到的名稱}
     calib_overrides: dict = field(default_factory=dict)  # {校正組 key: {"dark"/"bias"/"flat": set id 或 None}}
@@ -198,6 +199,7 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
     # ---- Stage 0 ----
     project = ingest(inputs, warnings, kinds=s.kinds, filter_aliases=s.filter_aliases,
                      temp_tolerance=s.temp_tolerance, split_nights=s.split_nights, overrides=s.calib_overrides,
+                     flat_any_night=s.flat_any_night,
                      merge_trains=s.merge_trains, name=safe_name(s.target) if s.target else None)
     log.open(output_dir / f"{project.name}.log")
     if s.preview:

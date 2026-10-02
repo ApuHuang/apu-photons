@@ -418,9 +418,10 @@ def light_group_key(f: Frame) -> str:
 
 
 def match_calibration(project: Project, warnings: list, temp_tolerance: float = 2.0,
-                      overrides: dict[str, dict] | None = None) -> None:
+                      overrides: dict[str, dict] | None = None, flat_any_night: bool = False) -> None:
     """每張 light 配 dark / bias / flat，每套 flat 配 flat-dark（或曝光相同的 dark、或 bias）。結果寫進
-    Frame.calib 與 project.calib_groups；沒用到的校正檔標上原因。overrides：{校正組 key: {kind: set id 或 None}}。"""
+    Frame.calib 與 project.calib_groups；沒用到的校正檔標上原因。overrides：{校正組 key: {kind: set id 或 None}}。
+    flat_any_night：這晚沒有 flat 時，改用日期最接近那晚的（使用者開啟才會；預設由使用者逐組選）。"""
     sets = project.calibration_sets
     by_kind: dict[str, list[CalibrationSet]] = defaultdict(list)
     for s in sets.values():
@@ -471,6 +472,10 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
         if not flat_hit:  # 別晚的 flat 不自動代用，列給使用者選（SPEC Stage 1）
             other_night, _ = _rank(by_kind["flat"], {k: v for k, v in flat_want.items() if k != "night"},
                                    f.date_obs, None, temp_tolerance)
+        borrowed = None
+        if auto["flat"] is None and other_night and flat_any_night:
+            borrowed = other_night[0]
+            auto["flat"] = borrowed.id
         chosen, source = dict(auto), "auto"
         if overrides and gk in overrides:
             for kind, sid in overrides[gk].items():
@@ -498,6 +503,9 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
                        "flat_sub": sub, "source": source}
         if not chosen["dark"] and not chosen["bias"]:
             warnings.append(Msg("msg.group_no_dark", group=gk, n=len(frames)))
+        if borrowed is not None and chosen["flat"] == borrowed.id:
+            warnings.append(Msg("msg.group_flat_other_night", group=gk, n=len(frames), set=borrowed.id,
+                                night=borrowed.conditions.get("night") or "?"))
         if not chosen["flat"]:
             if other_night:
                 warnings.append(Msg("msg.group_no_flat_night", group=gk, n=len(frames), night=f.night))
@@ -584,7 +592,8 @@ def safe_name(name: str) -> str:
 
 def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filter_aliases: dict | None = None,
            temp_tolerance: float = 2.0, split_nights: bool = True, overrides: dict | None = None,
-           merge_trains: list[list[str]] | None = None, name: str | None = None) -> Project:
+           merge_trains: list[list[str]] | None = None, name: str | None = None,
+           flat_any_night: bool = False) -> Project:
     """kinds：{路徑: 類型} 強制指定（使用者在介面上改的、或命令列 --dark 等）。"""
     forced = {str(Path(k).resolve()).casefold(): v for k, v in (kinds or {}).items()}
     files = expand_inputs(paths)
@@ -636,6 +645,6 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
 
     _check_rows(project, warnings)
     project.calibration_sets = build_sets([f for f in frames if f.kind in CAL_KINDS and f.accepted])
-    match_calibration(project, warnings, temp_tolerance, overrides)
+    match_calibration(project, warnings, temp_tolerance, overrides, flat_any_night)
     build_groups(project, merge_trains, warnings)
     return project

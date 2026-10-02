@@ -125,6 +125,7 @@ class PhotonsView(tk.Frame):
         self.weights_var = tk.BooleanVar(value=p.get("weights", True))
         self.pick_boost_var = tk.BooleanVar(value=p.get("pick_boost", False))
         self.split_nights_var = tk.BooleanVar(value=p.get("split_nights", True))
+        self.flat_any_night_var = tk.BooleanVar(value=p.get("flat_any_night", False))
         self.temp_tol_var = tk.DoubleVar(value=p.get("temp_tolerance", 2.0))
         # 輸出設定：面板上的控制項顯示「目前選的對齊組」的值；global_output 是所有對齊組的預設
         self.global_output = {"scale": p.get("scale", "1"), "drizzle": p.get("drizzle", False),
@@ -169,7 +170,8 @@ class PhotonsView(tk.Frame):
         for var in (self.scale_var, self.drizzle_var, self.pixfrac_var, self.fill_holes_var, self.crop_var,
                     self.min_cov_var):
             var.trace_add("write", lambda *_: self._output_changed())
-        for var in (self.split_nights_var, self.temp_tol_var, self.merge_var, self.grid_var):
+        for var in (self.split_nights_var, self.flat_any_night_var, self.temp_tol_var, self.merge_var,
+                    self.grid_var):
             var.trace_add("write", lambda *_: (self._params_changed(), self._schedule_plan()))
         self.target_var.trace_add("write", lambda *_: self._refresh_title())
         self.align_target_var.trace_add("write", lambda *_: self._load_output_controls())
@@ -303,6 +305,8 @@ class PhotonsView(tk.Frame):
         ParameterSlider(group.body, self, tr("gui.slider.temp_tol"), self.temp_tol_var, 0.5, 10,
                         lambda v: f"±{v:.1f}°C", 0.5).pack(fill="x", pady=(0, self.px(6)))
         ParameterToggle(group.body, self, tr("gui.toggle.split_nights"), self.split_nights_var).pack(
+            fill="x", pady=self.px(2))
+        ParameterToggle(group.body, self, tr("gui.toggle.flat_any_night"), self.flat_any_night_var).pack(
             fill="x", pady=self.px(2))
         self.cal_btn = ttk.Button(group.body, text=tr("gui.btn.show_calibration"), style="Dark.TButton",
                                   command=lambda: self.notebook.select(1))
@@ -805,6 +809,7 @@ class PhotonsView(tk.Frame):
     def _plan_args(self) -> dict:
         return dict(kinds=dict(self.kinds), filter_aliases=dict(self.filter_aliases),
                     temp_tolerance=float(self.temp_tol_var.get()), split_nights=bool(self.split_nights_var.get()),
+                    flat_any_night=bool(self.flat_any_night_var.get()),
                     overrides=json.loads(json.dumps(self.calib_overrides)), merge_trains=self._merge_trains(),
                     name=None)
 
@@ -910,7 +915,8 @@ class PhotonsView(tk.Frame):
             pick_boost=bool(self.pick_boost_var.get()), downsample=g["downsample"],
             crop_common=g["crop_common"], crop_min_coverage=g["crop_min_coverage"],
             output_bits=int(self.bits_var.get()), memory_mb=int(self.memory_var.get()) * 1024,
-            split_nights=bool(self.split_nights_var.get()), preview=int(self.preview_n_var.get()) if trial else 0,
+            split_nights=bool(self.split_nights_var.get()), flat_any_night=bool(self.flat_any_night_var.get()),
+            preview=int(self.preview_n_var.get()) if trial else 0,
             drizzle=g["drizzle"], pixfrac=g["pixfrac"], fill_holes=g["fill_holes"],
             gpu="auto" if self.gpu_var.get() else "cpu", workers=int(self.workers_var.get()),
             target=self.target_var.get().strip() or None, temp_tolerance=float(self.temp_tol_var.get()),
@@ -928,6 +934,7 @@ class PhotonsView(tk.Frame):
             "rejection": self.rejection_var.get(), "low": float(self.low_var.get()),
             "high": float(self.high_var.get()), "weights": bool(self.weights_var.get()),
             "pick_boost": bool(self.pick_boost_var.get()), "split_nights": bool(self.split_nights_var.get()),
+            "flat_any_night": bool(self.flat_any_night_var.get()),
             "temp_tolerance": float(self.temp_tol_var.get()),
             **{k: v for k, v in self.global_output.items()},
             "bits": self.bits_var.get(), "gpu": bool(self.gpu_var.get()),
@@ -1021,6 +1028,7 @@ class PhotonsView(tk.Frame):
         self.weights_var.set(s.weighting != "none")
         self.pick_boost_var.set(s.pick_boost)
         self.split_nights_var.set(s.split_nights)
+        self.flat_any_night_var.set(s.flat_any_night)
         self.temp_tol_var.set(s.temp_tolerance)
         self.bits_var.set(str(s.output_bits))
         scale = "2" if s.drizzle == 2 else ("0.5" if s.downsample == 0.5 else "1")

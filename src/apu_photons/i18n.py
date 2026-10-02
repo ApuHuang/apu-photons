@@ -683,7 +683,7 @@ _ZH.update({
     'gui.cal.unused_sets': '{n} 套校正檔沒有用到',
     'gui.btn.show_calibration': '檢視校正配對',
     'gui.slider.temp_tol': 'Dark 溫度容許差距',
-    'gui.group.calibration.info': '校正檔與 light 一起加入，依類型與條件自動配對：dark 依相機、增益、offset、曝光、溫度；bias 依相機、增益、offset；flat 依相機、光學系統、濾鏡與同一個觀測夜。配對結果在「校正」分頁，可以逐組改。\n\n別晚的 flat 不會自動代用：某晚沒有 flat 時，在「校正」分頁選要不要用別晚的。做好的 master（檔名有 master，或那一套只有一張）直接使用。\n\nDark 已含偏壓，有 dark 時不需要 bias。所有校正都在解馬賽克之前的原始資料上進行。',
+    'gui.group.calibration.info': '校正檔與 light 一起加入，依類型與條件自動配對：dark 依相機、增益、offset、曝光、溫度；bias 依相機、增益、offset；flat 依相機、光學系統、濾鏡與同一個觀測夜。配對結果在「校正」分頁，可以逐組改。\n\n別晚的 flat 預設不會自動代用：某晚沒有 flat 時，在「校正」分頁逐組選要不要用別晚的，或打開「沒有 flat 時用最近一晚的」一次套用到所有缺 flat 的組。做好的 master（檔名有 master，或那一套只有一張）直接使用。\n\nDark 已含偏壓，有 dark 時不需要 bias。所有校正都在解馬賽克之前的原始資料上進行。',
     'gui.output.apply_to': '設定套用到',
     'gui.output.all_align': '所有對齊組（預設）',
     'gui.toggle.merge': '合併不同光學系統',
@@ -772,7 +772,7 @@ _EN.update({
     'gui.cal.unused_sets': '{n} calibration sets are not used',
     'gui.btn.show_calibration': 'Show Calibration Matches',
     'gui.slider.temp_tol': 'Dark Temperature Tolerance',
-    'gui.group.calibration.info': 'Add calibration frames together with the lights; they are matched by type and conditions: darks by camera, gain, offset, exposure and temperature; bias by camera, gain and offset; flats by camera, optical train, filter and the same night. The matches are in the Calibration tab and can be changed per group.\n\nFlats from another night are never used automatically: when a night has no flat, choose in the Calibration tab whether to use another night\'s. Prepared masters ("master" in the name, or the only frame of its set) are used as is.\n\nDarks include the bias, so bias is not needed with darks. All calibration happens on the raw CFA data, before debayering.',
+    'gui.group.calibration.info': 'Add calibration frames together with the lights; they are matched by type and conditions: darks by camera, gain, offset, exposure and temperature; bias by camera, gain and offset; flats by camera, optical train, filter and the same night. The matches are in the Calibration tab and can be changed per group.\n\nBy default flats from another night are not used automatically: when a night has no flat, choose per group in the Calibration tab, or turn on Use Nearest Night\'s Flat for every group without one. Prepared masters ("master" in the name, or the only frame of its set) are used as is.\n\nDarks include the bias, so bias is not needed with darks. All calibration happens on the raw CFA data, before debayering.',
     'gui.output.apply_to': 'Settings apply to',
     'gui.output.all_align': 'All align groups (default)',
     'gui.toggle.merge': 'Merge Optical Trains',
@@ -800,6 +800,18 @@ _ZH.update({
 })
 _EN.update({
     'msg.reg.scale': 'implausible scale {scale:.3f} (should be close to 1 for the same rig); not a star image, or stars mismatched',
+})
+
+# 沒有 flat 的觀測夜改用最近一晚的
+_ZH.update({
+    'gui.toggle.flat_any_night': '沒有 flat 時用最近一晚的',
+    'msg.group_flat_other_night': '{group}（{n} 張）：這晚沒有 flat，改用 {night} 的 {set}',
+    'cli.flat_any_night': '某晚沒有 flat 時，改用日期最近那晚的 flat（預設不用，提醒後由你選）',
+})
+_EN.update({
+    'gui.toggle.flat_any_night': "Use Nearest Night's Flat",
+    'msg.group_flat_other_night': '{group} ({n} frames): no flat for this night; using {set} from {night}',
+    'cli.flat_any_night': 'when a night has no flat, use the flat from the nearest night (by default it is only suggested)',
 })
 
 _CATALOG = {"zh": _ZH, "en": _EN}
