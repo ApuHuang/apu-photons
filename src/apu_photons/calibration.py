@@ -14,7 +14,7 @@ from .combine import clip_combine
 from .i18n import Msg
 from .imageio import cfa_masks, load_image, write_fits
 
-ALGO_VERSION = "calib-2"  # 2：熱像素改用局部中位數判斷
+ALGO_VERSION = "calib-1"
 HOT_SIGMA = 5.0
 # 熱像素：3×3（同色）內中心那格佔的比例；星點再小也會分到周圍（比照 APU Pick）
 HOT_CONCENTRATION = 0.7
@@ -86,89 +86,55 @@ class Masters:
         return {k: getattr(self, k) is not None for k in ("bias", "dark", "flat")}
 
 
-def _prepared_master(path: Path, kind: str, log) -> np.ndarray:
-    """做好的 master 直接讀；0～1 的浮點 master（Siril、PixInsight 常見）換算成 16-bit ADU。"""
-    data, _ = load_image(path)
-    if kind != "flat" and np.nanmax(data) <= 1.0 + 1e-3:
-        data = data * 65535.0
-        log(Msg("msg.master_rescaled", kind=kind, name=path.name))
-    log(Msg("msg.master_file", kind=kind, name=path.name))
-    return data.astype(np.float32, copy=False)
+def build_masters(cal, bayer: str | None, cache: Path, warnings: list[str], log) -> Masters:
+    """Stage 1。cal: model.Calibration。結果以 cache key 存在 cache/masters。"""
+    mdir = cache / "masters"
+    mdir.mkdir(parents=True, exist_ok=True)
 
-
-def hot_from_dark(dark: np.ndarray, bayer: str | None) -> np.ndarray:
-    """master dark 的熱像素：比同色鄰近像素的中位數高出 5σ。
-
-    用局部中位數而不是整張的中位數：amp glow 那一側整片偏亮，但 dark 扣掉就沒了，不是壞像素
-    （整張門檻在 QHY183M 上會把右側 17% 的像素標成壞像素）。"""
-    bad = np.zeros(dark.shape, bool)
-    for sy, sx in _plane_views(dark.shape, bayer):
-        plane = dark[sy, sx]
-        resid = plane - median_filter(plane, size=5, mode="reflect")
-        sig = _mad_sigma(resid[::3, ::3])
-        bad[sy, sx] = resid > HOT_SIGMA * max(sig, 1e-6)
-    return bad
-
-
-class MasterBuilder:
-    """Stage 1：依 Stage 0 配好的校正套建 master；同一套只建一次（也存在 cache/masters 跨次共用）。"""
-
-    def __init__(self, sets: dict, cache: Path, warnings: list, log):
-        self.sets, self.warnings, self.log = sets, warnings, log
-        self.mdir = cache / "masters"
-        self.mdir.mkdir(parents=True, exist_ok=True)
-        self._memo: dict = {}
-
-    def _combined(self, sid: str, extra: dict | None = None, preprocess=None) -> np.ndarray:
-        s = self.sets[sid]
-        if s.is_master:
-            return _prepared_master(s.frames[0].path, s.kind, self.log)
-        paths = s.paths
-        key = _cache_key(s.kind, paths, extra or {})
-        path = self.mdir / f"master_{s.kind}_{key}.fits"
+    def master(kind: str, paths: list[Path], extra: dict | None = None, preprocess=None):
+        if not paths:
+            return None
+        key = _cache_key(kind, paths, extra or {})
+        path = mdir / f"master_{kind}_{key}.fits"
         if path.is_file():
-            self.log(Msg("msg.master_cached", kind=sid, name=path.name))
+            log(Msg("msg.master_cached", kind=kind, name=path.name))
             return fits.getdata(path).astype(np.float32)
-        self.log(Msg("msg.master_combine", kind=sid, n=len(paths)))
+        log(Msg("msg.master_combine", kind=kind, n=len(paths)))
         data = _combine_files(paths, preprocess=preprocess)
         hdr = fits.Header()
-        hdr["IMAGETYP"] = f"MASTER {s.kind.upper().replace('_', '')}"
+        hdr["IMAGETYP"] = f"MASTER {kind.upper()}"
         hdr["NCOMBINE"] = len(paths)
         write_fits(path, data, hdr)
+        cal.masters[kind] = path
         return data
 
-    def get(self, sid: str | None, sub: str | None = None) -> np.ndarray | None:
-        if sid is None:
-            return None
-        key = (sid, sub)
-        if key not in self._memo:
-            if self.sets[sid].kind == "flat":
-                sub_data = self.get(sub)
-                extra = {"sub": None if sub_data is None else [sub, float(np.mean(sub_data))]}
-                self._memo[key] = self._combined(sid, extra, (lambda d: d - sub_data) if sub_data is not None else None)
-            else:
-                self._memo[key] = self._combined(sid)
-        return self._memo[key]
+    bias = master("bias", cal.bias)
+    dark = master("dark", cal.dark)
+    flat_dark = master("flat_dark", cal.flat_dark)
+    flat = None
+    if cal.flat:
+        sub = flat_dark if flat_dark is not None else bias
+        if sub is None:
+            warnings.append(Msg("msg.flat_no_sub"))
+        flat_raw = master("flat", cal.flat, {"sub": None if sub is None else float(np.mean(sub))},
+                          preprocess=(lambda d: d - sub) if sub is not None else None)
+        flat = normalize_flat(flat_raw, bayer)
 
-    def masters(self, entry: dict, bayer: str | None, shape: tuple[int, int]) -> Masters:
-        """一個校正組（Stage 0 的 calib_groups 一筆）的 master；尺寸不合的不用並提醒。"""
-        def fit(kind, data, sid):
-            if data is not None and data.shape != tuple(shape):
-                self.warnings.append(Msg("msg.master_shape", kind=kind, name=sid, shape=data.shape, light=tuple(shape)))
-                return None
-            return data
+    if dark is None and bias is None:
+        warnings.append(Msg("msg.no_dark_bias"))
+    if flat is None:
+        warnings.append(Msg("msg.no_flat"))
 
-        dark = fit("dark", self.get(entry.get("dark")), entry.get("dark"))
-        bias = fit("bias", self.get(entry.get("bias")), entry.get("bias"))
-        flat_raw = fit("flat", self.get(entry.get("flat"), entry.get("flat_sub")), entry.get("flat"))
-        flat = normalize_flat(flat_raw, bayer) if flat_raw is not None else None
-        bad = hot_from_dark(dark, bayer) if dark is not None else None
-        if flat is not None:
-            cold = flat < COLD_FLAT
-            bad = cold if bad is None else (bad | cold)
-        if bad is not None:
-            self.log(Msg("msg.bad_pixels", n=int(bad.sum())))
-        return Masters(bias=bias, dark=dark, flat=flat, bad=bad)
+    bad = None
+    if dark is not None:
+        med, sig = float(np.median(dark)), _mad_sigma(dark[::4, ::4])
+        bad = dark > med + HOT_SIGMA * max(sig, 1e-6)
+    if flat is not None:
+        cold = flat < COLD_FLAT
+        bad = cold if bad is None else (bad | cold)
+    if bad is not None:
+        log(Msg("msg.bad_pixels", n=int(bad.sum())))
+    return Masters(bias=bias, dark=dark, flat=flat, bad=bad)
 
 
 def _plane_views(shape, bayer):

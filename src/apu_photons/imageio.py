@@ -83,12 +83,6 @@ def _load_raw(path: Path) -> tuple[np.ndarray, fits.Header]:
                 header["ISO"] = float(other.iso_speed)
             if isinstance(other.timestamp, datetime):
                 header["DATE-OBS"] = other.timestamp.isoformat(timespec="seconds")
-            if getattr(other, "focal_length", 0):
-                header["FOCALLEN"] = float(other.focal_length)  # 分光學系統用；RAW 沒有像素大小，不會算出像素尺度
-        lens = getattr(raw, "lens", None)
-        model = str(getattr(lens, "model", "") or "").strip()
-        if model:
-            header["LENS"] = model[:68]
     header["NAXIS2"], header["NAXIS1"] = data.shape
     header["ROWORDER"] = TOP_DOWN  # rawpy 的第 0 列是畫面最上面
     if "DATE-OBS" not in header:
