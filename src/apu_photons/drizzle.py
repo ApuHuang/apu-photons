@@ -50,19 +50,20 @@ def _chan_lut(bayer: str | None) -> np.ndarray:
     return lut
 
 
-def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float):
+def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float, in_shape: tuple[int, int]):
     """輸出第 q0~q1 列會用到的輸入區域（輸入座標，含 drop 半徑與邊界餘量）。"""
     s = spec.scale
-    h, w = spec.shape
+    w = spec.shape[1]
+    h_in, w_in = in_shape
     # 輸出列 → 參考座標的 y 範圍
     ry0 = (q0 - 0.5 - hw) / s - 0.5 + 0.5 / s
     ry1 = (q1 - 0.5 + hw) / s - 0.5 + 0.5 / s
     inv = np.linalg.inv(t)
     corners = np.array([[-1, ry0, 1], [w, ry0, 1], [-1, ry1, 1], [w, ry1, 1]], float) @ inv.T
     y0 = max(0, int(np.floor(corners[:, 1].min())) - 2)
-    y1 = min(h, int(np.ceil(corners[:, 1].max())) + 3)
+    y1 = min(h_in, int(np.ceil(corners[:, 1].max())) + 3)
     x0 = max(0, int(np.floor(corners[:, 0].min())) - 2)
-    x1 = min(w, int(np.ceil(corners[:, 0].max())) + 3)
+    x1 = min(w_in, int(np.ceil(corners[:, 0].max())) + 3)
     return y0 - y0 % 2, y1, x0 - x0 % 2, x1
 
 
@@ -77,12 +78,16 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
     npix = rows * wo
     acc = xp.zeros(nch * npix, xp.float32)
     wsum = xp.zeros(nch * npix, xp.float32)
-    lut = xp.asarray(_chan_lut(spec.bayer))
+    luts: dict = {}
     for k, (job, cal) in enumerate(zip(jobs, cals)):
         t = job.transform
+        pattern = job.pattern(spec.bayer)  # 合併不同相機時，每張用自己的 Bayer 排列投進同一個輸出網格
+        if pattern not in luts:
+            luts[pattern] = xp.asarray(_chan_lut(pattern))
+        lut = luts[pattern]
         hw = spec.pixfrac * float(np.sqrt(abs(np.linalg.det(t[:2, :2])))) * s / 2.0  # drop 半寬（輸出像素）
         reach = int(np.ceil(hw + 0.5))
-        y0, y1, x0, x1 = _input_bounds(t, q0, q1, spec, hw)
+        y0, y1, x0, x1 = _input_bounds(t, q0, q1, spec, hw, cal.shape)
         if y1 - y0 < 1 or x1 - x0 < 1:
             continue
         v = xp.asarray(np.array(cal[y0:y1, x0:x1], np.float32))

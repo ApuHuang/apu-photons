@@ -34,23 +34,23 @@ def test_msg_follows_current_language():
 
 
 def test_engine_in_english(tmp_path):
-    light, cal = _make(tmp_path, with_cal=False)
+    light, inputs = _make(tmp_path, with_cal=False)
     (light / "broken.fits").write_bytes(b"not a fits file")
     set_language("en")
-    res = run([light], cal, tmp_path / "m.fits", Settings(drizzle=2, workers=2), echo=None)
+    res = run(inputs, tmp_path / "m", Settings(drizzle=2, workers=2), echo=None)
     texts = [str(w) for w in res.warnings]
-    assert any("No flat" in t for t in texts) and any("could not be read" in t for t in texts)
+    assert any("no flat" in t for t in texts) and any("could not be read" in t for t in texts)
     assert not [t for t in texts if CJK.search(t.replace("broken.fits", ""))]
-    log = (tmp_path / "m.log").read_text(encoding="utf-8")
-    assert "Reference frame:" in log and not CJK.search(log.split("\n", 1)[1])
+    log = res.log.read_text(encoding="utf-8")
+    assert "Reference frame for" in log and not CJK.search(log.split("\n", 1)[1])
     # 換回中文：已經產生的警告跟著換
     set_language("zh")
     assert any("沒有 flat" in str(w) for w in res.warnings)
 
 
 def test_cli_english(tmp_path, capsys):
-    light, _cal = _make(tmp_path, with_cal=False)
-    assert cli.main(["--lang", "en", "stack", str(light), "-o", str(tmp_path / "c.fits"), "--workers", "1"]) == 0
+    light, _inputs = _make(tmp_path, with_cal=False)
+    assert cli.main(["--lang", "en", "stack", str(light), "-o", str(tmp_path / "c"), "--workers", "1"]) == 0
     out = capsys.readouterr().out
     assert "Integrated 8/8 frames" in out and "Recipe:" in out
     assert not CJK.search(out.replace(str(tmp_path), ""))

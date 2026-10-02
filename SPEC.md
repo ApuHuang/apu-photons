@@ -135,7 +135,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 
 ### Stage 0 — Ingest
 - **輸入是檔案**（0.2）：
-  - GUI：「加入檔案」可多選、可分多次加入（例如每晚一次）；light 與校正檔一起加入。Tk 沒有原生拖放，0.2 不做拖放。
+  - GUI：「加入檔案」可多選、可分多次加入（例如每晚一次）；light 與校正檔一起加入。Tk 沒有原生拖放，0.2 不做拖放
+    （Mac 可以把檔案或資料夾拖到 Dock 圖示上）。
   - CLI：直接給檔案（可用萬用字元）；為了相容，給資料夾時等同該資料夾內的所有影像（不往子資料夾找）。
   - 不再掃描資料夾，所以 Pick 的 `rejected/` 等子資料夾不會被誤讀。
 - **類型判斷**（light / dark / bias / flat / flat-dark），依序：
@@ -167,6 +168,11 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 | flat | 相機、光學系統、濾鏡、**同一觀測夜** | — | — |
 | flat-dark | 相機、增益、offset、與 flat 相同的曝光 | 溫度 ±2°C | 先找 flat-dark，沒有再找曝光相同的 dark，都沒有用 bias |
 
+- 校正檔先依類型與上表的條件分成「套」（溫度取整數度）；同一套整合成一個 master。
+  flat 不依曝光分套（天光 flat 常常每張曝光不同）；同一套 flat 的曝光不一致時，flat-dark 無從配對，改扣 bias。
+- 有 dark 時 light 不扣 bias（dark 已含偏壓），配到的 bias 列為「未使用：有 dark，不需要 bias」；使用者手動指定時照指定的。
+- header 缺某個條件（例如做好的 master 少了 `GAIN`）時視為未知：仍可配對，但排在條件完全相同的候選之後。
+
 - **dark、bias、flat-dark 的配對忽略 `FILTER`**：拍校正檔時濾鏡輪停在哪一格會寫進 header（NGC1499 的 dark / bias 都寫 `FILTER=Ha`），與校正無關。
 - **別晚的 flat 不自動代用**：某一晚沒有對應的 flat 時，該校正組顯示「沒有 flat」，由使用者選擇改用另一晚的 flat，或不用。
 - 配不到、或超出容許差距時提醒，不靜默套用；缺的項目跳過並在結果裡提醒（同 0.1）。
@@ -178,6 +184,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - `cal = (light − dark) / normalized_flat`（無 dark 時減 bias）。
 - **全程在未 debayer 的 CFA 資料上進行。**
 - Cosmetic correction：由 master dark 找熱像素 + 局部 sigma 偵測，以同色鄰近像素中位數取代（CFA-aware）。
+  - master dark 的熱像素：比**同色鄰近像素的中位數**高 5σ（0.2；0.1 用整張的中位數，amp glow 那一側整片會被當成壞像素，
+    QHY183M 右側 17% 的像素被換掉）。
 - 輸出：32-bit float 的 CFA 中介檔（cache）。
 
 ### Stage 3 — Star Detection + Registration
@@ -207,7 +215,7 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - 分塊（tile / row-band）串流讀取，記憶體上限可設定，禁止一次載入全部 frame。
 - 非 drizzle 路徑：各 frame debayer（bilinear）→ 套 transform（內插，clamp）→ normalize → 加權 rejection 整合。
 - Rejection：sigma clip / winsorized sigma clip，低／高各自的 σ 可設。
-- 每個整合組各自整合，輸出網格相同（同一對齊組的參考網格）。
+- 每個整合組各自整合，輸出網格相同（同一對齊組的參考網格）。可用的 frame 少於 2 張的組不輸出並提醒。
 - 輸出：
   - Master image（32-bit float）
   - **Per-frame pixel validity / rejection metadata**：遮罩 + 剔除類型（low / high / saturated / out-of-bounds），以參考座標存放（見 §4.4）。
@@ -228,6 +236,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - Downsample 0.5×：對 master 做 2×2 平均（**整合後**才做；UI 名稱為 *Downsample*，不叫 binning）；對齊組統一設定。
 - **裁切**（0.2）：
   - 預設裁到「至少 90% 的 frame 覆蓋」的範圍（門檻可調；0.1 是幾乎 100%，多晚有旋轉或 dither 大時會裁掉很多視野）；
+  - 找範圍的方法：從整張開始，每次把四條邊裡達標比例最低的那條往內收一格，直到四條邊都有 99.5% 以上的像素達標
+    （0.1 分別看每一列、每一行是否 98% 達標；中天翻轉後上下各缺一條、邊緣又略斜時，幾乎每一行都差一點，會裁掉大半張）；
   - 同一對齊組的所有整合組**用同一個裁切範圍**（各整合組範圍的交集），各濾鏡 master 才能像素對齊；
   - 可關閉；需要完整視野（例如之後的 mosaic）時，交給 APU Astro 的非破壞裁切決定。
   - 保留自動裁切的理由：邊緣只被少數 frame 覆蓋，雜訊高、可能有對齊邊界痕跡，會干擾 APU Astro 的去光害梯度與自動拉伸。
@@ -441,13 +451,18 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   - 「加入檔案」（多選，可分多次）、移除選取；
   - 顯示方式可切換：**依組顯示**（光學系統 → 整合組 → 檔案；校正檔依類型與條件）或**全部列表**；
   - 每個檔案顯示類型（可改）、濾鏡、曝光、增益、溫度、觀測夜；類型「未知」的醒目標示。
-- **校正**（取代 0.1 的四個資料夾欄位）：列出每個校正組自動配到的 dark / bias / flat / flat-dark，可從下拉選單改；缺 flat 的觀測夜在這裡選要用哪一晚的 flat 或不用；未使用的校正檔與原因另列。
-- **濾鏡名稱對應**：列出所有濾鏡名稱與自動歸併結果，可手動指定合併。
-- **輸出設定**：每個對齊組各一組（drizzle、pixfrac、downsample、裁切與覆蓋門檻）；只有一個對齊組時與 0.1 外觀相同。
-  合併光學系統的選項放在這裡。
+- **校正分頁**（取代 0.1 的四個資料夾欄位；右側面板太窄，放不下校正組的條件）：
+  - 上半：每個校正組自動配到的 dark / bias / flat，選一組後在下方的下拉選單改，或「還原自動」；
+    缺 flat 的觀測夜在這裡選要用哪一晚的 flat 或不用；
+  - 下半：所有校正檔（每套的類型、張數、是否 master、使用中或沒用到的原因）。
+  - 右側面板的「校正」只放摘要、溫度容許差距與「依觀測夜分組」。
+- **濾鏡名稱對應**：檔案分頁的「濾鏡名稱…」，列出 header 裡出現過的寫法，可手動指定合併到哪個名稱（會記住）。
+- **輸出設定**：右側面板「輸出」。有多個對齊組時上方多一個「設定套用到」（所有對齊組／某一個），
+  drizzle、pixfrac、downsample、裁切與覆蓋門檻可以每組不同；只有一個對齊組時與 0.1 外觀相同。
+  有兩個以上光學系統時多一個「合併不同光學系統」開關與參考網格選擇。
 - **設定**：溫度容許差距（預設 ±2°C）、裁切覆蓋門檻（預設 90%）、輸出資料夾與目標名稱。
-- **選單**：檔案 → 加入檔案…（⌘O / Ctrl+O）、載入 Recipe…
-- 結果分頁：整合組下拉選單、預覽放大（§6.5）。
+- **載入 Recipe**：Mac 在選單列「檔案 → 載入 Recipe…」；Windows 不放原生選單列（沒辦法變成深色），按鈕在檔案分頁。
+- 結果分頁：整合組下拉選單、Drizzle／一般疊圖、適合視窗／100%、預覽放大（§6.5）。
 
 ---
 
@@ -502,7 +517,9 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
 
 ### 7.2 載入 Recipe（0.2）
 - **套用設定**：把設定、濾鏡名稱對應、各對齊組的輸出設定套用到目前加入的檔案；校正配對依目前的檔案重新自動配對。
-- **完全重現**：依 `inputs` 與 `calibration_sets` 的路徑重新加入檔案，以 sha256 比對；找不到或內容不同的檔案列出來，其餘照 recipe 的分類、配對、參考 frame、裁切範圍執行。
+- **完全重現**：依 `inputs` 的路徑重新加入檔案；以檔案大小比對，有記錄 sha256 時（讀過 Pick sidecar 的 light）再比 sha256；
+  找不到或內容不同的檔案列出來，其餘照 recipe 的類型、校正配對、參考 frame 執行。
+  裁切範圍不另外保存：同樣的資料與設定會算出同樣的範圍。
 - 0.1 的 recipe（`apuphotons-recipe/1`）只能「套用設定」。
 
 ---
@@ -563,8 +580,9 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
 - DARK 120 張：300 s、0.2 s、1 s 各 40；BIAS 40 張。**沒有 flat**（使用者忘了拍，純測試用）。
 - 預期結果：
   - 一個光學系統、一個對齊組、兩個整合組（Ha 20、OIII 12）；
-  - Ha、OIII 都配到 300 s dark 與 bias（雖然校正檔 header 寫 `FILTER=Ha`，OIII 照樣配得到）；
+  - Ha、OIII 都配到 300 s dark（雖然校正檔 header 寫 `FILTER=Ha`，OIII 照樣配得到）；bias 列為未使用（有 dark）；
   - 0.2 s、1 s dark 列為未使用（沒有 flat 可配）；提醒沒有 flat；
   - OIII 若開 drizzle，提醒張數 < 20；
   - 輸出 `NGC1499_Ha.fits`、`NGC1499_OIII.fits` 與各自的覆蓋率圖，兩者尺寸相同、像素對齊。
+- 實測（2026-10-02，0.2.0.dev0，RTX 3090）：以上全部符合；兩個 master 都是 5450×3597，互相對齊的殘差 0.06 px、旋轉 0.0004°；熱像素 69,591 個（0.1 的整張門檻是 478,282 個，多的是 amp glow）；全程 167 秒。試跑（每組 5 張，跨中天翻轉）時發現 0.1 的裁切法只留 2236 px 寬，改成往內收邊後是 5470 px。
 - flat、多晚、多光學系統、彩色相機 RAW 混入等情況用合成資料測試。

@@ -137,7 +137,7 @@ def smoke_test(exe: Path, gpu: bool) -> None:
     from tests.test_pipeline import _make
 
     with tempfile.TemporaryDirectory() as tmp:
-        light, _cal = _make(Path(tmp), bayer="RGGB", with_cal=False, shifts=_dithered(10))
+        light, _inputs = _make(Path(tmp), bayer="RGGB", with_cal=False, shifts=_dithered(10))
         out = Path(tmp) / "smoke.txt"
         cmd = [str(exe), "--smoke-test", str(light), str(out)] + (["--expect-gpu"] if gpu else [])
         proc = subprocess.run(cmd, timeout=900)

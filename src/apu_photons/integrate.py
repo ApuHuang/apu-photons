@@ -29,6 +29,10 @@ class FrameJob:
     scale: list[float]
     offset: list[float]
     weight: float
+    bayer: str | None = None          # 這張自己的 Bayer 排列；None = 與輸出相同（合併不同相機時才會不同）
+
+    def pattern(self, default: str | None) -> str | None:
+        return self.bayer or default
 
 
 @dataclass
@@ -131,7 +135,7 @@ def _cpu_band(band: tuple[int, int]):
     r0, r1 = band
     jobs, spec = _W["jobs"], _W["spec"]
     w = spec.shape[1]
-    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w), spec.bayer, r0, r1, w)
+    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w), j.pattern(spec.bayer), r0, r1, w)
                       for j, c in zip(jobs, _W["cals"])])
     master, codes = combine_band(CPU, stack, _W["weights"], spec)
     cov, counts = _write_band(spec, r0, master, codes)
@@ -166,7 +170,8 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
                 patches = [f.result() for f in pending]
                 if k + 1 < len(bands):
                     pending = fetch(bands[k + 1])  # 算這段時先讀下一段
-                stack = be.xp.stack([warp_band(be, j, p, spec.bayer, r0, r1, w) for j, p in zip(jobs, patches)])
+                stack = be.xp.stack([warp_band(be, j, p, j.pattern(spec.bayer), r0, r1, w)
+                                     for j, p in zip(jobs, patches)])
                 master, codes = combine_band(be, stack, weights, spec)
                 del stack
                 cov, cnt = _write_band(spec, r0, be.to_numpy(master), be.to_numpy(codes))

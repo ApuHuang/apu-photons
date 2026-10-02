@@ -3,7 +3,7 @@
 multiprocessing.freeze_support() 一定要最先呼叫：打包後校正、整合、drizzle 的子行程跑的也是這個 exe，
 少了它每個子行程都會再開一個視窗。
 
---smoke-test <Light 資料夾> <結果檔> [--expect-gpu]：確認打包好的程式能完整疊圖（含多行程、CFA Drizzle、
+--smoke-test <Light 資料夾> <結果檔> [--expect-gpu]：確認打包好的程式能完整疊圖（含檔案分類、多行程、CFA Drizzle、
 預覽、相機 RAW 函式庫），build_exe.py 打包完會自動跑。這台電腦有 NVIDIA GPU 時再用 GPU 跑一次；
 有包 GPU（--expect-gpu，Windows）但這台沒有顯示卡時，至少確認 CuPy 有打包進來（偵測失敗的原因不能是找不到模組）。
 """
@@ -20,9 +20,8 @@ def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
     try:
         import rawpy
 
-        from apu_photons import backend, gui  # noqa: F401  視窗介面用的東西都要有打包進來
+        from apu_photons import backend, gui, recipe, zoomview  # noqa: F401  視窗介面用的東西都要有打包進來
         from apu_photons.engine import Settings, run
-        from apu_photons.model import Calibration
         from apu_photons.preview import load_preview
 
         assert rawpy.libraw_version
@@ -33,11 +32,10 @@ def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
             assert backend.last_error and "ModuleNotFound" not in backend.last_error                 and "ImportError" not in backend.last_error, f"CuPy 沒有打包好：{backend.last_error}"
             lines.append(f"gpu: none ({backend.last_error})")
         for mode in ["cpu"] + (["gpu"] if has_gpu else []):
-            master = result.parent / f"smoke_{mode}.fits"
-            res = run([Path(folder)], Calibration(), master,
+            res = run([Path(folder)], result.parent / f"smoke_{mode}",
                       Settings(drizzle=2, workers=2, gpu=mode, crop_common=False), echo=None)
-            load_preview(master)
-            holes = max(res.qc["drizzle"]["holes_fraction"])
+            load_preview(res.output)
+            holes = max(res.qc["groups"][0]["drizzle"]["holes_fraction"])
             lines.append(f"{mode}: frames={res.qc['frames_integrated']} holes={holes:.4f}")
         result.write_text("ok " + "; ".join(lines) + "\n", encoding="utf-8")
         return 0

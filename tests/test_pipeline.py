@@ -8,7 +8,6 @@ from apu_photons.combine import HIGH, clip_combine
 from apu_photons.engine import Settings, run
 from apu_photons.imageio import bayer_pattern, list_images
 from apu_photons.ingest import night_of
-from apu_photons.model import Calibration
 from apu_photons.register import register
 from apu_photons.stars import detect
 
@@ -19,6 +18,7 @@ SHIFTS = [(0, 0, 0), (3.4, -2.7, 0.3), (-5.2, 4.1, -0.4), (7.7, 1.3, 0.2), (-2.1
 
 
 def _make(tmp_path, bayer=None, trail_index=3, with_cal=True, shifts=SHIFTS):
+    """回傳（light 資料夾, 要交給 run() 的輸入：light 與校正檔資料夾）。類型由資料夾名稱判斷。"""
     hot = synth.hot_pixels()
     vig = synth.vignette_map()
     light = tmp_path / "light"
@@ -27,7 +27,7 @@ def _make(tmp_path, bayer=None, trail_index=3, with_cal=True, shifts=SHIFTS):
         img = synth.render(tx, ty, rot, seed=100 + i, vignette=vig, hot=hot, trail=(i == trail_index), bayer=bayer)
         synth.write(light / f"L_{i:03d}.fits", img, EXPTIME=300.0,
                     DATE_OBS=f"2026-09-20T14:{i:02d}:00", XPIXSZ=3.76, FOCALLEN=400.0, **extra)
-    cal = Calibration()
+    inputs = [light]
     if with_cal:
         rng = np.random.default_rng(3)
         for i in range(5):
@@ -36,8 +36,8 @@ def _make(tmp_path, bayer=None, trail_index=3, with_cal=True, shifts=SHIFTS):
             synth.write(tmp_path / "dark" / f"D_{i}.fits", d, EXPTIME=300.0, **extra)
             f = rng.poisson(20000 * vig).astype(np.float32)
             synth.write(tmp_path / "flat" / f"F_{i}.fits", f, EXPTIME=1.0, **extra)
-        cal = Calibration(dark=list_images(tmp_path / "dark"), flat=list_images(tmp_path / "flat"))
-    return light, cal
+        inputs += [tmp_path / "dark", tmp_path / "flat"]
+    return light, inputs
 
 
 @pytest.mark.parametrize("bayer", [None, "RGGB"])
@@ -88,17 +88,23 @@ def test_bayer_offset_and_night():
 
 @pytest.mark.parametrize("bayer", [None, "RGGB"])
 def test_full_stack(tmp_path, bayer):
-    light, cal = _make(tmp_path, bayer=bayer)
-    out = tmp_path / "out" / "master.fits"
+    light, inputs = _make(tmp_path, bayer=bayer)
+    out_dir = tmp_path / "out"
     # 固定參考 frame：合成星場每張 FWHM 幾乎一樣，自動選可能選到有軌跡的那張，
     # 參考 frame 不內插、軌跡較細，剔除比例就不到其他張的 2 倍
-    res = run([light], cal, out, Settings(crop_common=False, reference="L_000.fits"), echo=None)
+    res = run(inputs, out_dir, Settings(crop_common=False, reference="L_000.fits"), echo=None)
+    out = res.output
+    assert out == out_dir / "light.fits"  # 沒有 OBJECT：用 light 的資料夾名稱
     data = fits.getdata(out)
     assert data.shape == ((3, synth.H, synth.W) if bayer else (synth.H, synth.W))
     assert res.qc["frames_integrated"] == len(SHIFTS)
 
     lum = data.mean(axis=0) if bayer else data
-    ref = next(f for f in res.project.frames if f is res.project.reference)
+    ref = res.project.align_groups[0].reference
+    assert ref.name == "L_000.fits"
+    # dark 與 flat 依條件自動配對（類型由資料夾名稱判斷）
+    entry = next(iter(res.project.calib_groups.values()))
+    assert entry["dark"] and entry["flat"]
     # 衛星軌跡被剔除：沿著軌跡取樣，不應比附近背景亮很多
     inner = lum[40:-40, 40:-40]
     bg, noise = np.median(inner), 1.4826 * np.median(np.abs(inner - np.median(inner)))
@@ -117,29 +123,32 @@ def test_full_stack(tmp_path, bayer):
     assert ((pos > 30 * noise) & (conc > 0.6)).sum() == 0
 
     recipe = json.loads(res.recipe.read_text(encoding="utf-8"))
-    assert recipe["schema"] == "apuphotons-recipe/1"
-    assert recipe["reference_frame"] == ref.name
-    assert (out.parent / ".photons_cache" / "rejection").is_dir()
+    assert recipe["schema"] == "apuphotons-recipe/2"
+    assert recipe["align_groups"][0]["reference_frame"] == ref.name
+    assert recipe["outputs"][0]["file"] == "light.fits"
+    assert list((out_dir / ".photons_cache" / "groups").glob("*/rejection"))
+    cov = fits.getdata(out_dir / "light_coverage.fits")
+    assert cov.shape == data.shape[-2:] and cov.max() == len(SHIFTS)
 
 
 def test_pick_sidecar_gate(tmp_path):
     from apu_photons.imageio import file_sha256
 
-    light, cal = _make(tmp_path, with_cal=False)
+    light, inputs = _make(tmp_path, with_cal=False)
     files = list_images(light)
     doc = {"schema": "apupick/1", "pick_version": "0.5.0", "frames": [
         {"file": p.name, "sha256": file_sha256(p), "score": 90.0, "fwhm_px": 3.0,
          "verdict": "reject" if i == 5 else "keep"} for i, p in enumerate(files)]}
     (light / "apupick.json").write_text(json.dumps(doc), encoding="utf-8")
-    res = run([light], cal, tmp_path / "m.fits", Settings(), echo=None)
+    res = run(inputs, tmp_path / "m", Settings(), echo=None)
     assert res.qc["rejected_by_reason"].get("pick") == 1
     assert res.qc["frames_integrated"] == len(SHIFTS) - 1
     assert any("沒有 flat" in w for w in res.warnings)
 
 
 def test_preview_and_downsample(tmp_path):
-    light, cal = _make(tmp_path, with_cal=False)
-    res = run([light], cal, tmp_path / "p.fits", Settings(preview=4, downsample=0.5, crop_common=False), echo=None)
+    light, inputs = _make(tmp_path, with_cal=False)
+    res = run(inputs, tmp_path / "p", Settings(preview=4, downsample=0.5, crop_common=False), echo=None)
     assert res.qc["frames_integrated"] == 4
     assert fits.getdata(res.output).shape == (synth.H // 2, synth.W // 2)
 
@@ -167,8 +176,7 @@ def _make_sloped(folder, order=None, n=5, odd=None):
 @pytest.mark.parametrize("order", [None, "TOP-DOWN", "BOTTOM-UP"])
 def test_output_roworder_follows_lights(tmp_path, order):
     light = _make_sloped(tmp_path / "light", order)
-    res = run([light], Calibration(), tmp_path / "m.fits", Settings(crop_common=False, reference="L_000.fits"),
-              echo=None)
+    res = run([light], tmp_path / "m", Settings(crop_common=False, reference="L_000.fits"), echo=None)
     assert fits.getheader(res.output)["ROWORDER"] == (order or "BOTTOM-UP")
     # 用後製端的讀法打開，方向要跟原始 light 一樣
     master, ref = _read_like_processing(res.output), _read_like_processing(light / "L_000.fits")
@@ -178,7 +186,7 @@ def test_output_roworder_follows_lights(tmp_path, order):
 
 def test_roworder_mismatch_rejected(tmp_path):
     light = _make_sloped(tmp_path / "light", None, n=5, odd=2)
-    res = run([light], Calibration(), tmp_path / "m.fits", Settings(crop_common=False), echo=None)
+    res = run([light], tmp_path / "m", Settings(crop_common=False), echo=None)
     assert res.qc["frames_integrated"] == 4
     assert any("ROWORDER" in str(w) for w in res.warnings)
 
@@ -231,14 +239,13 @@ def test_headless_defaults_without_calibration(tmp_path):
     import subprocess
     import sys
 
-    light, _cal = _make(tmp_path, with_cal=False)
-    out = tmp_path / "out" / "master.fits"
+    light, _inputs = _make(tmp_path, with_cal=False)
+    out = tmp_path / "out"
     code = (
         "import sys\n"
         "from pathlib import Path\n"
         "from apu_photons.engine import Settings, run\n"
-        "from apu_photons.model import Calibration\n"
-        f"res = run([Path({str(light)!r})], Calibration(), Path({str(out)!r}), Settings(), echo=None)\n"
+        f"res = run([Path({str(light)!r})], Path({str(out)!r}), Settings(), echo=None)\n"
         "assert res.output.is_file(), res.output\n"
         "assert 'tkinter' not in sys.modules\n"
         "print(res.qc['frames_integrated'])\n"

@@ -16,15 +16,14 @@ gpu_only = pytest.mark.skipif(not HAS_GPU, reason="沒有 NVIDIA GPU / CuPy")
 
 
 def _run(tmp_path, name, **kw):
-    out = tmp_path / name / "m.fits"
-    res = run([tmp_path / "light"], _run.cal, out, Settings(crop_common=False, **kw), echo=None)
-    return res, fits.getdata(out)
+    res = run(_run.inputs, tmp_path / name, Settings(crop_common=False, target="m", **kw), echo=None)
+    return res, fits.getdata(res.output)
 
 
 @pytest.fixture
 def data(tmp_path):
-    _light, cal = _make(tmp_path, bayer="RGGB", shifts=_dithered(12))
-    _run.cal = cal
+    _light, inputs = _make(tmp_path, bayer="RGGB", shifts=_dithered(12))
+    _run.inputs = inputs
     return tmp_path
 
 
@@ -48,7 +47,8 @@ def test_gpu_matches_cpu(data):
         diff = np.abs(x.astype(float) - y.astype(float))
         assert (diff > 0.1).mean() < 1e-4
         assert np.percentile(diff, 99.9) < 0.05
-    assert rc.qc["drizzle"]["holes_fraction"] == pytest.approx(rg.qc["drizzle"]["holes_fraction"], abs=1e-4)
+    assert rc.qc["groups"][0]["drizzle"]["holes_fraction"] == pytest.approx(
+        rg.qc["groups"][0]["drizzle"]["holes_fraction"], abs=1e-4)
 
 
 @gpu_only

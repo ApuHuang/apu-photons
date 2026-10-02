@@ -23,21 +23,31 @@ def _mtf(m: float, x: np.ndarray) -> np.ndarray:
     return ((m - 1) * x) / ((2 * m - 1) * x - m)
 
 
-def stretch(channel: np.ndarray, sample: np.ndarray | None = None) -> np.ndarray:
-    s = channel if sample is None else sample
-    s = s[np.isfinite(s)]
+def stretch_params(sample: np.ndarray) -> tuple[float, float, float] | None:
+    """（黑點, 範圍, midtone）；放大檢視時整張算一次後固定，縮放、平移時亮度才不會跳。"""
+    s = sample[np.isfinite(sample)]
     if not s.size:
-        return np.zeros_like(channel, np.float32)
+        return None
     med = float(np.median(s))
     mad = float(np.median(np.abs(s - med))) * 1.4826
     top = float(np.percentile(s, 99.99))
     low = med - SHADOW_CLIP * mad
     span = max(top - low, 1e-6)
-    x = np.clip((np.nan_to_num(channel, nan=low) - low) / span, 0, 1)
     med_n = float(np.clip((med - low) / span, 1e-6, 1 - 1e-6))
     t = TARGET_BACKGROUND
-    m = med_n * (1 - t) / (med_n - 2 * t * med_n + t)
+    return low, span, med_n * (1 - t) / (med_n - 2 * t * med_n + t)
+
+
+def apply_stretch(channel: np.ndarray, params: tuple[float, float, float] | None) -> np.ndarray:
+    if params is None:
+        return np.zeros_like(channel, np.float32)
+    low, span, m = params
+    x = np.clip((np.nan_to_num(channel, nan=low) - low) / span, 0, 1)
     return np.clip(_mtf(m, x), 0, 1).astype(np.float32)
+
+
+def stretch(channel: np.ndarray, sample: np.ndarray | None = None) -> np.ndarray:
+    return apply_stretch(channel, stretch_params(channel if sample is None else sample))
 
 
 def _bin(img: np.ndarray, n: int) -> np.ndarray:
