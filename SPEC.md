@@ -24,7 +24,7 @@
 
 - **APU Pick**：frame 層級的決策 —「這張要不要留？」輸出原始品質指標。
 - **APU Photons**：pixel 層級的決策 — 權重、正規化、剔除、整合。
-- Pick 分數 **≠** 疊圖權重。Pick 分數只做 gate（篩選）或加成；權重由 Photons 以物理量計算。
+- Pick 分數 **≠** 疊圖權重。Pick 只做 gate（篩選）；權重由 Photons 以物理量計算。
 
 ---
 
@@ -223,7 +223,7 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - 主權重由物理量計算，預設：`w ∝ SNR² / FWHM²`（SNR 由背景雜訊與星點 flux 估計；FWHM 用參考像素，合併光學系統時換算，§3.1.3）。
 - Pick 的作用：
   - Gate：Pick 標記為淘汰的 frame 直接排除（`rejected(reason=pick)`）。
-  - 可選加成：`w' = w × f(pick_score)`，預設關閉。
+  - ~~可選加成 `w' = w × f(pick_score)`~~：2026-10-02 拿掉（與 SNR²／FWHM² 重複計算，有效張數變少，畫質沒有幫助）。
 - 權重在整合組內正規化到總和為 1，記錄至 Frame。
 
 ### Stage 6 — Integrate
@@ -427,7 +427,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   兩邊只需對齊**濾鏡名稱的比對規則**（§3.1.2）。
 - 讀取介面集中在 `apu_photons/integrations/pick.py`：
   `load_pick_sidecar(folder) -> dict[sha256, (file, PickMetrics)] | None`；找不到 sidecar、schema 不認得、hash 對不上時一律回傳 `None` 或略過該筆，並寫入 QC 警告，不中斷流程。
-- 使用點只有兩處：Stage 0 填入 `Frame.pick_metrics`、Stage 5 套用 gate（`verdict == "reject"`）與可選加成。其他 Stage 不得直接讀 Pick 的資料。
+- 使用點只有兩處：Stage 0 填入 `Frame.pick_metrics`、Stage 5 套用 gate（`verdict == "reject"`）。其他 Stage 不得直接讀 Pick 的資料。
 - 將來可共用的程式碼（FITS/RAW 讀取、CFA super-pixel、星點量測、暗房介面元件）先各自實作、介面保持相容；等兩邊穩定後再考慮抽成共用套件。
 
 ---
@@ -494,7 +494,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   "created": "…",
   "target": "NGC1499",
   "settings": { "rejection": "winsorized", "low": 4.0, "high": 3.0, "weighting": true,
-                "pick_boost": false, "temp_tolerance_c": 2.0, "bits": 32 },
+                "temp_tolerance_c": 2.0, "bits": 32 },
   "filter_aliases": { "H-alpha": "Ha" },
   "optical_trains": [
     { "id": "QHY183M @ 250mm", "camera": "QHY183M", "focal_mm": 250.0, "pixel_um": 2.4,
@@ -519,7 +519,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   "stages": {
     "registration": { "algorithm": "triangle-ransac", "version": "1", "model": "similarity" },
     "normalize":    { "algorithm": "robust-scale-offset", "version": "1" },
-    "weight":       { "formula": "snr2_over_fwhm2", "pick_boost": false },
+    "weight":       { "formula": "snr2_over_fwhm2" },
     "integrate":    { "method": "weighted_average", "rejection": "winsorized_sigma", "low": 4.0, "high": 3.0 },
     "drizzle":      { "version": "drizzle-1" }
   },

@@ -73,7 +73,6 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--low", type=float, default=4.0, help=tr("cli.low"))
     st.add_argument("--high", type=float, default=3.0, help=tr("cli.high"))
     st.add_argument("--no-weights", action="store_true", help=tr("cli.no_weights"))
-    st.add_argument("--pick-boost", action="store_true", help=tr("cli.pick_boost"))
     st.add_argument("--reference", help=tr("cli.reference"))
     st.add_argument("--downsample", action="store_true", help=tr("cli.downsample"))
     st.add_argument("--drizzle", type=int, choices=[1, 2], default=0, help=tr("cli.drizzle"))
@@ -94,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     kinds = _forced_kinds(a)
     inputs = [Path(p) for p in a.inputs] + [Path(p) for p in kinds]
     s = Settings(rejection=a.rejection, low=a.low, high=a.high, weighting="none" if a.no_weights else "snr2_over_fwhm2",
-                 pick_boost=a.pick_boost, reference=a.reference, downsample=0.5 if a.downsample else 1.0,
+                 reference=a.reference, downsample=0.5 if a.downsample else 1.0,
                  crop_common=not a.no_crop, output_bits=a.bits, memory_mb=a.memory, split_nights=not a.one_session,
                  flat_any_night=a.flat_any_night,
                  keep_rejection_maps=not a.no_rejection_maps, preview=a.preview,

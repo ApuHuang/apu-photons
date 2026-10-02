@@ -124,7 +124,6 @@ class PhotonsView(tk.Frame):
         self.low_var = tk.DoubleVar(value=p.get("low", 4.0))
         self.high_var = tk.DoubleVar(value=p.get("high", 3.0))
         self.weights_var = tk.BooleanVar(value=p.get("weights", True))
-        self.pick_boost_var = tk.BooleanVar(value=p.get("pick_boost", False))
         self.split_nights_var = tk.BooleanVar(value=p.get("split_nights", True))
         self.flat_any_night_var = tk.BooleanVar(value=p.get("flat_any_night", False))
         self.temp_tol_var = tk.DoubleVar(value=p.get("temp_tolerance", 2.0))
@@ -165,7 +164,7 @@ class PhotonsView(tk.Frame):
         self.bind_class(self._tag, "<MouseWheel>", self._scroll_panel, add="+")
         self._build()
 
-        for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var, self.pick_boost_var,
+        for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var,
                     self.bits_var, self.gpu_var, self.workers_var, self.memory_var, self.preview_n_var):
             var.trace_add("write", lambda *_: self._params_changed())
         for var in (self.scale_var, self.drizzle_var, self.pixfrac_var, self.fill_holes_var, self.crop_var,
@@ -322,7 +321,6 @@ class PhotonsView(tk.Frame):
         self.high_slider = ParameterSlider(group.body, self, tr("gui.slider.high"), self.high_var, 1.5, 8, sec, 0.1)
         self.high_slider.pack(fill="x", pady=(0, self.px(6)))
         ParameterToggle(group.body, self, tr("gui.toggle.weights"), self.weights_var).pack(fill="x", pady=self.px(2))
-        ParameterToggle(group.body, self, tr("gui.toggle.pick_boost"), self.pick_boost_var).pack(fill="x", pady=self.px(2))
 
         group = PanelGroup(panel, self, "output", tr("gui.group.output"), tr("gui.group.output.info"))
         self.align_row = tk.Frame(group.body, bg=D.panel)
@@ -997,7 +995,7 @@ class PhotonsView(tk.Frame):
             rejection=self.rejection_var.get(), low=round(float(self.low_var.get()), 2),
             high=round(float(self.high_var.get()), 2),
             weighting="snr2_over_fwhm2" if self.weights_var.get() else "none",
-            pick_boost=bool(self.pick_boost_var.get()), downsample=g["downsample"],
+            downsample=g["downsample"],
             crop_common=g["crop_common"], crop_min_coverage=g["crop_min_coverage"],
             output_bits=int(self.bits_var.get()), memory_mb=int(self.memory_var.get()) * 1024,
             split_nights=bool(self.split_nights_var.get()), flat_any_night=bool(self.flat_any_night_var.get()),
@@ -1019,7 +1017,7 @@ class PhotonsView(tk.Frame):
         save_settings(params={
             "rejection": self.rejection_var.get(), "low": float(self.low_var.get()),
             "high": float(self.high_var.get()), "weights": bool(self.weights_var.get()),
-            "pick_boost": bool(self.pick_boost_var.get()), "split_nights": bool(self.split_nights_var.get()),
+            "split_nights": bool(self.split_nights_var.get()),
             "flat_any_night": bool(self.flat_any_night_var.get()),
             "temp_tolerance": float(self.temp_tol_var.get()),
             **{k: v for k, v in self.global_output.items()},
@@ -1112,7 +1110,6 @@ class PhotonsView(tk.Frame):
         self.low_var.set(s.low)
         self.high_var.set(s.high)
         self.weights_var.set(s.weighting != "none")
-        self.pick_boost_var.set(s.pick_boost)
         self.split_nights_var.set(s.split_nights)
         self.flat_any_night_var.set(s.flat_any_night)
         self.temp_tol_var.set(s.temp_tolerance)

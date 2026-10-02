@@ -50,7 +50,6 @@ class Settings:
     low: float = 4.0
     high: float = 3.0
     weighting: str = "snr2_over_fwhm2"  # snr2_over_fwhm2 / none
-    pick_boost: bool = False
     reference: str | list | None = None  # 參考 frame 的檔名（可以多個，各自套用到所在的對齊組）；None = 自動
     downsample: float = 1.0            # 1.0 或 0.5
     crop_common: bool = True
@@ -488,10 +487,6 @@ def _weights(frames: list[Frame], s: Settings) -> None:
         fwhm = np.where(np.isfinite(fwhm), fwhm, np.nanmedian(fwhm) if np.isfinite(fwhm).any() else 1.0)
         # 正規化後的 SNR ∝ 1/noise；權重 = SNR² / FWHM²
         raw = 1.0 / (noise ** 2 * fwhm ** 2)
-    if s.pick_boost:
-        boost = np.array([(f.pick_metrics.score / 100.0) if f.pick_metrics and f.pick_metrics.score else 1.0
-                          for f in frames])
-        raw = raw * boost
     w = raw / raw.sum()
     for f, v in zip(frames, w):
         f.weight = float(v)
@@ -767,7 +762,7 @@ def _write_recipe(output_dir: Path, project: Project, outputs: list[GroupResult]
             "calibration": {"version": CALIB_VERSION},
             "registration": {"algorithm": "triangle-ransac", "version": REG_VERSION, "model": "similarity"},
             "normalize": {"algorithm": "star-flux-scale+background-offset", "version": "1"},
-            "weight": {"formula": s.weighting, "pick_boost": s.pick_boost},
+            "weight": {"formula": s.weighting},
             "integrate": {"method": "weighted_average", "rejection": s.rejection, "low": s.low, "high": s.high},
             "drizzle": {"version": drizzle_mod.ALGO_VERSION},
         },

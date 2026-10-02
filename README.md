@@ -36,7 +36,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 | 2 校正 | 在 CFA 原始資料上校正；flat 各色分別正規化；熱像素（master dark 的局部偵測 + 單張集中度偵測）與冷像素修正 |
 | 3 對齊 | 星點偵測（CFA 用 super-pixel）、三角形配對 + RANSAC 相似變換、中天翻轉；每個對齊組一張參考 frame，組內各濾鏡都對齊到它 |
 | 4 正規化 | 整合組內，以配對星點的亮度比當 scale、背景中位數當 offset |
-| 5 權重 | SNR² / FWHM²（SNR 以正規化後的雜訊計）；APU Pick 的 reject 當篩選，分數加成可選 |
+| 5 權重 | SNR² / FWHM²（SNR 以正規化後的雜訊計）；APU Pick 的 reject 當篩選 |
 | 6 整合 | 每個整合組（光學系統 × 濾鏡）各自整合；分段（band）串流，不一次載入全部；winsorized / sigma / average / median；保存每張的剔除遮罩 |
 | 7 Drizzle | 1× / 2×（對齊組統一）；OSC 用 CFA drizzle（不解馬賽克、各色像素直接投進 R/G/B 網格）；沿用 Stage 4~6 的正規化、權重、剔除遮罩；輸出權重圖、零星空洞自動補；張數或 dither 不足只提醒 |
 | 8 輸出 | 每組一個 master（`<目標>_<濾鏡>.fits`）與覆蓋率圖；對齊組共用裁切範圍（預設至少 90% 的 frame 覆蓋）；Downsample 0.5×、32-bit / 16-bit FITS、專案一份 `recipe.json` 與 log |

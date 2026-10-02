@@ -130,15 +130,13 @@ _ZH: dict[str, str] = {
     "gui.group.integration.info": "Winsorized（建議）：對離群值穩健，衛星、飛機、熱像素會被剔除。\n"
                                   "Sigma：傳統的反覆 σ 剔除。平均：不剔除。中位數：最穩但雜訊較多。\n\n"
                                   "加權：依每張的 SNR 與星點大小給權重，好的片貢獻較多。\n"
-                                  "APU Pick 分數加成：預設 Pick 只負責篩選（淘汰的不用），開啟後分數也會影響權重。\n"
-                                  "依觀測夜分組：同一晚的 frame 歸為同一個 session。",
+                                  "APU Pick 淘汰的片（sidecar 裡標為 reject）不會疊進去。",
     "gui.rej.average": "平均",
     "gui.rej.median": "中位數",
     "gui.slider.low": "低端剔除",
     "gui.slider.high": "高端剔除",
     "gui.value.sigma": "{v:.1f} σ",
     "gui.toggle.weights": "依品質加權",
-    "gui.toggle.pick_boost": "APU Pick 分數加成",
     "gui.toggle.split_nights": "依觀測夜分組",
     "gui.group.output": "輸出",
     "gui.group.output.info": "輸出倍率：0.5× 在整合後縮小；2× 使用 Drizzle；1× 可選擇是否 Drizzle。\n\n"
@@ -265,16 +263,14 @@ _EN: dict[str, str] = {
     "gui.group.integration.info": "Winsorized (recommended): robust to outliers; satellites, planes and hot pixels "
                                   "are rejected.\nSigma: classic iterative σ clipping. Average: no rejection. "
                                   "Median: most robust, but noisier.\n\nWeighting: better frames (higher SNR, "
-                                  "smaller stars) contribute more.\nAPU Pick Score Boost: by default Pick only "
-                                  "filters (rejected frames are skipped); with this on, the score also affects the "
-                                  "weight.\nGroup By Night: frames from the same night form one session.",
+                                  "smaller stars) contribute more.\nFrames rejected by APU Pick (marked reject in "
+                                  "its sidecar) are not stacked.",
     "gui.rej.average": "Average",
     "gui.rej.median": "Median",
     "gui.slider.low": "Low Rejection",
     "gui.slider.high": "High Rejection",
     "gui.value.sigma": "{v:.1f} σ",
     "gui.toggle.weights": "Weight By Quality",
-    "gui.toggle.pick_boost": "APU Pick Score Boost",
     "gui.toggle.split_nights": "Group By Night",
     "gui.group.output": "Output",
     "gui.group.output.info": "Output scale: 0.5× downsamples after integration; 2× uses Drizzle; at 1× Drizzle is "
@@ -397,7 +393,6 @@ _ZH.update({
     'cli.low': '低端剔除 σ（預設 4）',
     'cli.high': '高端剔除 σ（預設 3）',
     'cli.no_weights': '不加權（每張權重相同）',
-    'cli.pick_boost': '用 APU Pick 分數加成權重（預設只當篩選）',
     'cli.reference': '指定參考 frame 的檔名',
     'cli.downsample': '輸出 0.5×（整合後 2×2 平均）',
     'cli.drizzle': 'Drizzle 輸出倍率（OSC 自動用 CFA drizzle）；一般疊圖另存為 *_stack.fits',
@@ -495,7 +490,6 @@ _EN.update({
     'cli.low': 'low rejection σ (default 4)',
     'cli.high': 'high rejection σ (default 3)',
     'cli.no_weights': 'no weighting (every frame counts the same)',
-    'cli.pick_boost': 'let the APU Pick score boost the weight (by default Pick only filters)',
     'cli.reference': 'file name of the reference frame',
     'cli.downsample': '0.5× output (2×2 average after integration)',
     'cli.drizzle': 'Drizzle output scale (CFA drizzle for colour cameras); the regular stack is saved as *_stack.fits',
