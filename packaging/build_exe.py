@@ -64,6 +64,9 @@ def build(gpu: bool) -> Path:
         "--collect-submodules", "apu_photons",
         "--collect-all", "rawpy",
         "--copy-metadata", "photutils",
+        # photutils 3.1 起匯入時用 astropy 的 minversion 檢查 scipy／numpy 版本，要讀套件資訊；沒包進去會 KeyError: 'scipy'
+        "--copy-metadata", "scipy",
+        "--copy-metadata", "numpy",
         "--distpath", str(DIST),
         "--workpath", str(BUILD),
         "--specpath", str(BUILD),
