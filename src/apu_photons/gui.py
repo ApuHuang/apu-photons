@@ -124,6 +124,7 @@ class PhotonsView(tk.Frame):
         self.low_var = tk.DoubleVar(value=p.get("low", 4.0))
         self.high_var = tk.DoubleVar(value=p.get("high", 3.0))
         self.weights_var = tk.BooleanVar(value=p.get("weights", True))
+        self.local_norm_var = tk.BooleanVar(value=p.get("local_norm", False))
         self.split_nights_var = tk.BooleanVar(value=p.get("split_nights", True))
         self.flat_any_night_var = tk.BooleanVar(value=p.get("flat_any_night", False))
         self.temp_tol_var = tk.DoubleVar(value=p.get("temp_tolerance", 2.0))
@@ -141,6 +142,7 @@ class PhotonsView(tk.Frame):
         self.merge_var = tk.BooleanVar(value=False)
         self.grid_var = tk.StringVar(value="")
         self.bits_var = tk.StringVar(value=p.get("bits", "32"))
+        self.dual_band_var = tk.BooleanVar(value=p.get("dual_band", True))
         self.gpu_var = tk.BooleanVar(value=p.get("gpu", True))
         self.workers_var = tk.IntVar(value=p.get("workers", backend.default_workers()))
         self.memory_var = tk.IntVar(value=p.get("memory_gb", 2))
@@ -164,8 +166,9 @@ class PhotonsView(tk.Frame):
         self.bind_class(self._tag, "<MouseWheel>", self._scroll_panel, add="+")
         self._build()
 
-        for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var,
-                    self.bits_var, self.gpu_var, self.workers_var, self.memory_var, self.preview_n_var):
+        for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var, self.local_norm_var,
+                    self.bits_var, self.dual_band_var, self.gpu_var, self.workers_var, self.memory_var,
+                    self.preview_n_var):
             var.trace_add("write", lambda *_: self._params_changed())
         for var in (self.scale_var, self.drizzle_var, self.pixfrac_var, self.fill_holes_var, self.crop_var,
                     self.min_cov_var):
@@ -238,6 +241,11 @@ class PhotonsView(tk.Frame):
                                   command=self.ask_add_files)
         self.add_btn.pack(side="left")
         Tooltip(self.add_btn, tr("gui.btn.add_files.help", shortcut=OPEN_SHORTCUT), self)
+        self.recipe_btn = None
+        if not IS_MAC:  # Mac 在選單列「檔案」裡；Windows 不放選單列（原生選單列沒辦法變深色）
+            self.recipe_btn = ttk.Button(actions, text=tr("gui.btn.load_recipe"), style="Dark.TButton",
+                                         command=self.ask_load_recipe)
+            self.recipe_btn.pack(side="left", padx=(self.px(6), 0))
         self.trial_btn = ttk.Button(actions, text=tr("gui.btn.trial"), style="Dark.TButton",
                                     command=lambda: self._start(trial=True))
         self.trial_btn.pack(side="left", padx=(self.px(6), 0))
@@ -321,6 +329,8 @@ class PhotonsView(tk.Frame):
         self.high_slider = ParameterSlider(group.body, self, tr("gui.slider.high"), self.high_var, 1.5, 8, sec, 0.1)
         self.high_slider.pack(fill="x", pady=(0, self.px(6)))
         ParameterToggle(group.body, self, tr("gui.toggle.weights"), self.weights_var).pack(fill="x", pady=self.px(2))
+        ParameterToggle(group.body, self, tr("gui.toggle.local_norm"), self.local_norm_var).pack(
+            fill="x", pady=self.px(2))
 
         group = PanelGroup(panel, self, "output", tr("gui.group.output"), tr("gui.group.output.info"))
         self.align_row = tk.Frame(group.body, bg=D.panel)
@@ -356,6 +366,8 @@ class PhotonsView(tk.Frame):
         self.grid_combo = ttk.Combobox(self.grid_row, state="readonly", style="Dark.TCombobox", font=self.fonts.small,
                                        textvariable=self.grid_var)
         self.grid_combo.pack(fill="x", pady=(self.px(3), 0))
+        ParameterToggle(group.body, self, tr("gui.toggle.dual_band"), self.dual_band_var).pack(
+            fill="x", pady=self.px(2))
         row = tk.Frame(group.body, bg=D.panel)
         row.pack(fill="x", pady=(self.px(6), 0))
         tk.Label(row, text=tr("gui.output.bits"), font=self.fonts.ui, fg=D.label, bg=D.panel).pack(side="left")
@@ -436,12 +448,6 @@ class PhotonsView(tk.Frame):
         self.assign_btn = ttk.Button(top, text=tr("gui.btn.assign"), style="Dark.TButton",
                                      command=self._assign_calibration)
         self.assign_btn.pack(side="right", padx=(0, self.px(6)))
-        if not IS_MAC:  # Mac 在選單列「檔案」裡；Windows 不放選單列（原生選單列沒辦法變深色）
-            self.recipe_btn = ttk.Button(top, text=tr("gui.btn.load_recipe"), style="Dark.TButton",
-                                         command=self.ask_load_recipe)
-            self.recipe_btn.pack(side="right", padx=(0, self.px(6)))
-        ttk.Button(top, text=tr("gui.btn.add"), style="Dark.TButton", command=self.ask_add_files).pack(
-            side="right", padx=(0, self.px(6)))
 
         table = tk.Frame(files, bg=D.canvas)
         table.pack(fill="both", expand=True)
@@ -995,6 +1001,8 @@ class PhotonsView(tk.Frame):
             rejection=self.rejection_var.get(), low=round(float(self.low_var.get()), 2),
             high=round(float(self.high_var.get()), 2),
             weighting="snr2_over_fwhm2" if self.weights_var.get() else "none",
+            normalization="local" if self.local_norm_var.get() else "global",
+            dual_band=bool(self.dual_band_var.get()),
             downsample=g["downsample"],
             crop_common=g["crop_common"], crop_min_coverage=g["crop_min_coverage"],
             output_bits=int(self.bits_var.get()), memory_mb=int(self.memory_var.get()) * 1024,
@@ -1017,11 +1025,12 @@ class PhotonsView(tk.Frame):
         save_settings(params={
             "rejection": self.rejection_var.get(), "low": float(self.low_var.get()),
             "high": float(self.high_var.get()), "weights": bool(self.weights_var.get()),
+            "local_norm": bool(self.local_norm_var.get()),
             "split_nights": bool(self.split_nights_var.get()),
             "flat_any_night": bool(self.flat_any_night_var.get()),
             "temp_tolerance": float(self.temp_tol_var.get()),
             **{k: v for k, v in self.global_output.items()},
-            "bits": self.bits_var.get(), "gpu": bool(self.gpu_var.get()),
+            "bits": self.bits_var.get(), "dual_band": bool(self.dual_band_var.get()), "gpu": bool(self.gpu_var.get()),
             "workers": int(self.workers_var.get()), "memory_gb": int(self.memory_var.get()),
             "preview_n": int(self.preview_n_var.get())})
 
@@ -1110,10 +1119,12 @@ class PhotonsView(tk.Frame):
         self.low_var.set(s.low)
         self.high_var.set(s.high)
         self.weights_var.set(s.weighting != "none")
+        self.local_norm_var.set(s.normalization == "local")
         self.split_nights_var.set(s.split_nights)
         self.flat_any_night_var.set(s.flat_any_night)
         self.temp_tol_var.set(s.temp_tolerance)
         self.bits_var.set(str(s.output_bits))
+        self.dual_band_var.set(s.dual_band)
         scale = "2" if s.drizzle == 2 else ("0.5" if s.downsample == 0.5 else "1")
         self.global_output = {"scale": scale, "drizzle": s.drizzle >= 1, "pixfrac": s.pixfrac,
                               "fill_holes": s.fill_holes, "crop": s.crop_common, "min_coverage": s.crop_min_coverage}
@@ -1254,7 +1265,8 @@ class PhotonsView(tk.Frame):
             self._refresh_all()
         elif kind == "progress":
             _, stage, done, total = event
-            if self._stage is None or self._stage[0] != stage:
+            # 換階段，或同一階段開始下一組（例如下一個 master、下一個整合組）時重新計時，剩餘時間才準
+            if self._stage is None or self._stage[0] != stage or done < self._stage[1]:
                 self._stage_started = time.time()
             self._stage = (stage, done, total)
             self._status(self._progress_text)
@@ -1345,8 +1357,9 @@ class PhotonsView(tk.Frame):
         ready = bool(self.plan is not None and self.plan.lights and not self._planning)
         self.stack_btn.state(["!disabled"] if (ready or busy) else ["disabled"])
         self.trial_btn.state(["!disabled"] if ready and not busy else ["disabled"])
-        for btn in (self.add_btn, self.output_btn):
-            btn.state(["disabled"] if busy else ["!disabled"])
+        for btn in (self.add_btn, self.output_btn, self.recipe_btn):
+            if btn is not None:
+                btn.state(["disabled"] if busy else ["!disabled"])
         for btn in (self.remove_btn, self.filters_btn, self.assign_btn):
             btn.state(["disabled"] if busy or not self.files else ["!disabled"])
         self.kind_btn.state(["disabled"] if busy or not self.files else ["!disabled"])
@@ -1578,8 +1591,7 @@ class PhotonsView(tk.Frame):
                 lines.append(tr("gui.qc.group", name=g["output"], used=g["frames_integrated"],
                                 total=g["frames_total"],
                                 drizzle=tr("gui.qc.drizzle_ok") if g["drizzle_suitable"] else tr("gui.qc.drizzle_no")))
-            if q.get("suspicious_frames"):
-                lines.append(tr("gui.qc.suspicious", files="、".join(q["suspicious_frames"])))
+            lines += [f"• {a}" for g in q["groups"] for a in g.get("advice", [])]
             lines += [f"⚠ {w}" for w in self.result.warnings]
             self.qc_text.insert("end", "\n".join(lines))
         self.qc_text.configure(state="disabled")

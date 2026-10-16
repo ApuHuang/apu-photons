@@ -8,17 +8,24 @@ from __future__ import annotations
 import numpy as np
 import scipy.ndimage as _ndi
 
-from .imageio import cfa_masks
-
 _K_RB = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], np.float32) / 4.0
 _K_G = np.array([[0, 1, 0], [1, 4, 1], [0, 1, 0]], np.float32) / 4.0
 
 
+def _sparse(cfa, pattern: str, color: str, xp):
+    """只留這個顏色的像素、其他填 0。用跨步切片，不建整張的座標與遮罩
+    （以前每次都在 CPU 上建，Seestar 這種幾百張小圖時占整合時間的大半）。"""
+    out = xp.zeros(tuple(cfa.shape), xp.float32)
+    for i, c in enumerate(pattern):
+        if c == color:
+            dy, dx = i // 2, i % 2
+            out[dy::2, dx::2] = cfa[dy::2, dx::2]
+    return out
+
+
 def bilinear(cfa, pattern: str, xp=np, ndi=_ndi):
     """回傳 (3, H, W) 的 R, G, B。"""
-    masks = cfa_masks(pattern, tuple(cfa.shape))
     out = xp.empty((3,) + tuple(cfa.shape), xp.float32)
     for i, (color, k) in enumerate((("R", _K_RB), ("G", _K_G), ("B", _K_RB))):
-        m = xp.asarray(masks[color])
-        out[i] = ndi.convolve(xp.where(m, cfa, 0.0).astype(xp.float32), xp.asarray(k), mode="mirror")
+        out[i] = ndi.convolve(_sparse(cfa, pattern, color, xp), xp.asarray(k), mode="mirror")
     return out

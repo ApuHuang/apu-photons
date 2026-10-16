@@ -257,3 +257,37 @@ def test_flat_sub_choice_file_assignment_and_unused_reasons(tmp_path):
     assert len(manual) == 1 and len(manual[0]["frames"]) == 2 and manual[0]["flat"] is None
     auto = [g for g in project.calib_groups.values() if not g["manual"]]
     assert len(auto) == 1 and len(auto[0]["frames"]) == len(SHIFTS) - 2 and auto[0]["flat"]
+
+
+def test_temperature_splits_groups_only_when_darks_exist(tmp_path):
+    """不製冷的相機（例如 Seestar）溫度一直變：沒有 dark 時溫度不影響配對，不拆組、只提醒一次；有 dark 才依溫度分組。"""
+    _lights(tmp_path / "LIGHT", "Ha", night=20)
+    for i, p in enumerate(sorted((tmp_path / "LIGHT").iterdir())):
+        with fits.open(p, mode="update") as h:
+            h[0].header["CCD-TEMP"] = 15.0 + i  # 15～19°C
+    warnings = []
+    project = ingest([tmp_path / "LIGHT"], warnings)
+    assert len(project.calib_groups) == 1
+    assert sum("dark" in str(w) for w in warnings) == 1
+    _darks(tmp_path / "DARK", 300.0, temp=17.0)
+    project = ingest([tmp_path / "LIGHT", tmp_path / "DARK"], [], temp_tolerance=2.0)
+    assert len(project.calib_groups) == len(SHIFTS)  # 每個溫度一組，各自看 dark 在不在容許差距內
+
+
+def test_already_stacked_images_are_skipped(tmp_path):
+    """Seestar 自己疊的 Stacked_*.fit、header 寫了疊過幾張、彩色三通道的成品：不再當 light 疊進去；手動指定時照指定。"""
+    light = _lights(tmp_path / "LIGHT", "IRCUT", night=20)
+    img = synth.render(0, 0, 0, seed=1)
+    synth.write(light / "Stacked_31_M 63_20.0s_IRCUT_20260303-001358.fit", img, IMAGETYP="Light", EXPTIME=20.0,
+                FILTER="IRCUT", DATE_OBS="2026-09-20T14:30:00", STACKCNT=31, **CAM)
+    synth.write(light / "other_stack.fits", img, IMAGETYP="LIGHT", EXPTIME=300.0, FILTER="IRCUT",
+                DATE_OBS="2026-09-20T14:31:00", NCOMBINE=12, **CAM)
+    synth.write(light / "rgb_result.fits", np.stack([img, img, img]), EXPTIME=300.0, **CAM)
+    warnings = []
+    project = ingest([light], warnings)
+    skipped = sorted(f.name for f in project.lights if f.reject_reason == "stacked")
+    assert skipped == ["Stacked_31_M 63_20.0s_IRCUT_20260303-001358.fit", "other_stack.fits", "rgb_result.fits"]
+    assert len(project.accepted) == len(SHIFTS) and len(project.trains) == 1
+    assert sum("疊好" in str(w) for w in warnings) == 1
+    forced = ingest([light], [], kinds={str(light / "other_stack.fits"): "light"})
+    assert next(f for f in forced.lights if f.name == "other_stack.fits").accepted

@@ -94,9 +94,15 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
         yy = xp.arange(y0, y1, dtype=xp.float32)[:, None]
         xx = xp.arange(x0, x1, dtype=xp.float32)[None, :]
         ch = lut[(xp.arange(y0, y1) % 2)[:, None], (xp.arange(x0, x1) % 2)[None, :]]
-        v = v * job.scale[0] + xp.asarray(np.asarray(job.offset, np.float32))[ch]
         xr = t[0, 0] * xx + t[0, 1] * yy + t[0, 2]
         yr = t[1, 0] * xx + t[1, 1] * yy + t[1, 2]
+        if job.local:
+            off = xp.zeros(v.shape, xp.float32)
+            for c in range(nch):
+                off = xp.where(ch == c, job.offset_at(xp, c, xr, yr, spec.shape), off)
+            v = v * job.scale[0] + off
+        else:
+            v = v * job.scale[0] + xp.asarray(np.asarray(job.offset, np.float32))[ch]
         keep = xp.isfinite(v)
         if rmaps is not None and rmaps[k] is not None:
             xi = xp.rint(xr).astype(xp.int64)

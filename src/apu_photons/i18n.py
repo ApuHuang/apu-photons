@@ -75,7 +75,6 @@ _ZH: dict[str, str] = {
     "gui.tab.result": "結果",
     "gui.tab.log": "紀錄",
     "gui.light.folders": "Light 資料夾",
-    "gui.btn.add": "加入…",
     "gui.btn.remove": "移除",
     "gui.col.folder": "資料夾",
     "gui.col.count": "張數",
@@ -95,7 +94,6 @@ _ZH: dict[str, str] = {
     "gui.result.empty": "疊圖完成後在這裡預覽",
     "gui.result.stretch_note": "預覽為自動拉伸，輸出的 FITS 仍是線性資料",
     "gui.qc.output": "輸出：{path}",
-    "gui.qc.suspicious": "剔除像素特別多（可能有衛星、飛機或雲）：{files}",
     "gui.qc.drizzle_ok": "張數與 dither 足夠，適合 Drizzle",
     "gui.qc.drizzle_no": "張數或 dither 不足，不建議 Drizzle",
     "reason.pick": "APU Pick 淘汰",
@@ -130,7 +128,10 @@ _ZH: dict[str, str] = {
     "gui.group.integration.info": "Winsorized（建議）：對離群值穩健，衛星、飛機、熱像素會被剔除。\n"
                                   "Sigma：傳統的反覆 σ 剔除。平均：不剔除。中位數：最穩但雜訊較多。\n\n"
                                   "加權：依每張的 SNR 與星點大小給權重，好的片貢獻較多。\n"
-                                  "APU Pick 淘汰的片（sidecar 裡標為 reject）不會疊進去。",
+                                  "APU Pick 淘汰的片（sidecar 裡標為 reject）不會疊進去。\n\n"
+                                  "局部正規化：各張的光害梯度不同時（多晚拍攝、目標高度變化），把每張的大尺度背景"
+                                  "對齊到參考 frame，剔除才不會把梯度差當成離群值。成品保留參考 frame 的梯度，"
+                                  "交給後製去除。過雲的片救不了。",
     "gui.rej.average": "平均",
     "gui.rej.median": "中位數",
     "gui.slider.low": "低端剔除",
@@ -207,7 +208,6 @@ _EN: dict[str, str] = {
     "gui.tab.result": "Result",
     "gui.tab.log": "Log",
     "gui.light.folders": "Light Folders",
-    "gui.btn.add": "Add…",
     "gui.btn.remove": "Remove",
     "gui.col.folder": "Folder",
     "gui.col.count": "Frames",
@@ -227,7 +227,6 @@ _EN: dict[str, str] = {
     "gui.result.empty": "The result appears here after stacking",
     "gui.result.stretch_note": "Preview is auto-stretched; the FITS output stays linear",
     "gui.qc.output": "Output: {path}",
-    "gui.qc.suspicious": "Many rejected pixels (satellite, plane or cloud?): {files}",
     "gui.qc.drizzle_ok": "Enough frames and dither for Drizzle",
     "gui.qc.drizzle_no": "Not enough frames or dither; Drizzle not recommended",
     "reason.pick": "Rejected by APU Pick",
@@ -264,7 +263,11 @@ _EN: dict[str, str] = {
                                   "are rejected.\nSigma: classic iterative σ clipping. Average: no rejection. "
                                   "Median: most robust, but noisier.\n\nWeighting: better frames (higher SNR, "
                                   "smaller stars) contribute more.\nFrames rejected by APU Pick (marked reject in "
-                                  "its sidecar) are not stacked.",
+                                  "its sidecar) are not stacked.\n\nLocal Normalization: when the light-pollution "
+                                  "gradient differs between frames (several nights, changing altitude), each frame's "
+                                  "large-scale background is matched to the reference frame, so rejection does not "
+                                  "treat gradient differences as outliers. The master keeps the reference frame's "
+                                  "gradient for post-processing to remove. It cannot rescue frames shot through cloud.",
     "gui.rej.average": "Average",
     "gui.rej.median": "Median",
     "gui.slider.low": "Low Rejection",
@@ -410,7 +413,6 @@ _ZH.update({
     'cli.error': '錯誤：{error}',
     'cli.summary': '整合 {used}/{total} 張 → {output}',
     'cli.unused': '未使用：{items}',
-    'cli.suspicious': '剔除像素特別多（可能有衛星、飛機或雲）：{files}',
     'cli.drizzle_holes': 'Drizzle {scale}×：沒有資料的像素 {holes}',
     'cli.drizzle_ok': 'Drizzle 適用性：適合',
     'cli.drizzle_no': 'Drizzle 適用性：不建議（張數或 dither 不足）',
@@ -507,7 +509,6 @@ _EN.update({
     'cli.error': 'Error: {error}',
     'cli.summary': 'Integrated {used}/{total} frames → {output}',
     'cli.unused': 'Unused: {items}',
-    'cli.suspicious': 'Many rejected pixels (satellite, plane or cloud?): {files}',
     'cli.drizzle_holes': 'Drizzle {scale}×: pixels without data {holes}',
     'cli.drizzle_ok': 'Drizzle: suitable',
     'cli.drizzle_no': 'Drizzle: not recommended (too few frames or too little dither)',
@@ -685,7 +686,7 @@ _ZH.update({
     'gui.slider.min_coverage': '裁切的覆蓋門檻',
     'gui.output.target': '目標名稱（輸出檔名的開頭，空白＝自動）',
     'gui.output.folder': '輸出資料夾',
-    'gui.group.output.info': '每個整合組（光學系統 × 濾鏡）輸出一個 master，例如 M31_Ha.fits、M31_OIII.fits；同一光學系統的各濾鏡對齊到同一張參考 frame，像素完全對齊。另外輸出 *_coverage.fits（每個像素被幾張覆蓋）。\n\n輸出倍率：0.5× 在整合後縮小；2× 使用 Drizzle；1× 可選擇是否 Drizzle。有多個光學系統時，可以每個對齊組分開設定。\n\n裁切：裁到至少這個比例的 frame 覆蓋的範圍，同一對齊組的各濾鏡用同一個範圍。\n\n合併不同光學系統：同一個濾鏡疊成一個 master（重新取樣到選定的網格，只留重疊區）。適合兩套相同器材同時拍；不同彩色相機合併可能偏色。',
+    'gui.group.output.info': '每個整合組（光學系統 × 濾鏡）輸出一個 master，例如 M31_Ha.fits、M31_OIII.fits；同一光學系統的各濾鏡對齊到同一張參考 frame，像素完全對齊。另外輸出 *_coverage.fits（每個像素被幾張覆蓋）。\n\n輸出倍率：0.5× 在整合後縮小；2× 使用 Drizzle；1× 可選擇是否 Drizzle。有多個光學系統時，可以每個對齊組分開設定。\n\n裁切：裁到至少這個比例的 frame 覆蓋的範圍，同一對齊組的各濾鏡用同一個範圍。\n\n合併不同光學系統：同一個濾鏡疊成一個 master（重新取樣到選定的網格，只留重疊區）。適合兩套相同器材同時拍；不同彩色相機合併可能偏色。\n\n雙窄帶濾鏡另存 Ha／OIII：彩色相機用雙窄帶濾鏡（Seestar 的 LP、L-eXtreme、L-eNhance、ALP-T 等）時，另存 Ha（紅色）與 OIII（綠、藍）兩個單色 master，與彩色 master 像素對齊，可以直接在 APU Processing 做 HOO 合成；彩色 master 照樣輸出。',
     'gui.metric.outputs': '輸出 master',
     'gui.result.no_filter': '（無濾鏡）',
     'gui.zoom.fit': '適合視窗',
@@ -774,7 +775,7 @@ _EN.update({
     'gui.slider.min_coverage': 'Crop Coverage Threshold',
     'gui.output.target': 'Target name (start of the output names; blank = automatic)',
     'gui.output.folder': 'Output Folder',
-    'gui.group.output.info': 'Each integration group (optical train × filter) produces one master, e.g. M31_Ha.fits and M31_OIII.fits; all filters of one optical train are registered to the same reference frame and are pixel aligned. A *_coverage.fits (frames per pixel) is written too.\n\nOutput scale: 0.5× downsamples after integration; 2× uses Drizzle; at 1× Drizzle is optional. With several optical trains, each align group can have its own settings.\n\nCrop: to the area covered by at least this fraction of frames; all filters of an align group use the same area.\n\nMerge optical trains: one master per filter (resampled to the chosen grid, overlap only). Meant for two identical rigs shooting together; different colour cameras may show a colour cast.',
+    'gui.group.output.info': 'Each integration group (optical train × filter) produces one master, e.g. M31_Ha.fits and M31_OIII.fits; all filters of one optical train are registered to the same reference frame and are pixel aligned. A *_coverage.fits (frames per pixel) is written too.\n\nOutput scale: 0.5× downsamples after integration; 2× uses Drizzle; at 1× Drizzle is optional. With several optical trains, each align group can have its own settings.\n\nCrop: to the area covered by at least this fraction of frames; all filters of an align group use the same area.\n\nMerge optical trains: one master per filter (resampled to the chosen grid, overlap only). Meant for two identical rigs shooting together; different colour cameras may show a colour cast.\n\nSave Ha / OIII for dual-band filters: with a colour camera and a dual-band filter (Seestar LP, L-eXtreme, L-eNhance, ALP-T, …), two mono masters are saved as well, Ha (red) and OIII (green and blue), pixel aligned with the colour master and ready for HOO in APU Processing; the colour master is still written.',
     'gui.metric.outputs': 'Masters',
     'gui.result.no_filter': '(no filter)',
     'gui.zoom.fit': 'Fit',
@@ -845,6 +846,93 @@ _EN.update({
     'gui.assign.auto': '(auto)',
     'gui.assign.clear': 'Clear Assignment',
     'gui.assign.no_lights': 'Select the lights to assign in the list first',
+})
+
+# 壞 frame 不拖垮整個 master
+_ZH.update({
+    'reason.bad_weight': '權重算不出來',
+    'msg.bad_weight': '{name}: 權重算不出來（雜訊或星點大小異常，可能是對齊錯誤），不使用',
+    'msg.reg.overlap': '與參考 frame 只重疊 {pct:.0f}%，對齊結果不可信',
+    'msg.group_no_data': '{group}：整合結果沒有任何有效像素，不輸出（請檢查這組的 frame 與對齊）',
+})
+_EN.update({
+    'reason.bad_weight': 'Weight could not be computed',
+    'msg.bad_weight': '{name}: weight could not be computed (abnormal noise or star size, possibly a bad registration); not used',
+    'msg.reg.overlap': 'only {pct:.0f}% overlap with the reference frame; registration is not trustworthy',
+    'msg.group_no_data': '{group}: the integration has no valid pixels; no output (check the frames and registration of this group)',
+})
+
+# 已經疊好的成品（Seestar 的 Stacked_*.fit 等）
+_ZH.update({
+    'reason.stacked': '已經疊好的成品',
+    'msg.stacked_skipped': '略過 {n} 個已經疊好的影像（{names}）：Seestar 的 Stacked_ 檔或其他軟體疊好的成品，不再疊一次',
+})
+_EN.update({
+    'reason.stacked': 'Already stacked',
+    'msg.stacked_skipped': 'skipped {n} already stacked images ({names}): Seestar Stacked_ files or other finished stacks '
+                           'are not stacked again',
+})
+
+# 結果裡的建議：可疑的片怎麼處理、Drizzle、裁切
+_ZH.update({
+    'msg.advice.sky': '{group}：{n} 張大片被剔除（背景梯度或天光變化，例如天亮、月光）：{files}。'
+                      '建議打開「局部正規化」再疊一次；還是很多的話排除這些片',
+    'msg.advice.sky_local': '{group}：{n} 張開了局部正規化還是大片被剔除（天光變化太大）：{files}。'
+                            '建議排除這些片（在檔案分頁選取後移除，或在 APU Pick 淘汰）',
+    'msg.advice.cloud': '{group}：{n} 張星點明顯變暗（可能是雲或霧）：{files}。權重已自動降低，建議排除這些片',
+    'msg.advice.trail': '{group}：{n} 張有衛星或飛機軌跡，已經剔除，不用處理：{files}',
+    'msg.advice.suspicious': '{group}：{n} 張剔除像素特別多（可能有衛星、飛機或雲）：{files}',
+    'msg.advice.drizzle_osc': '{group}：{n} 張、每張之間有位移，適合 Drizzle；彩色相機開 Drizzle 1× 就能避開解馬賽克造成的模糊',
+    'msg.advice.crop': '{group}：每張之間位移大，裁切後只剩原本的 {pct:.0f}%（至少 {cov:.0f}% 的張數涵蓋的範圍）；'
+                       '想保留更大的範圍可以調低「裁切的覆蓋門檻」，邊緣的雜訊會比較高',
+})
+_EN.update({
+    'msg.advice.sky': '{group}: {n} frames have large rejected areas (background gradient or changing sky, e.g. dawn '
+                      'or moonlight): {files}. Try stacking again with Local Normalization; if many remain, exclude '
+                      'these frames',
+    'msg.advice.sky_local': '{group}: {n} frames still have large rejected areas with Local Normalization (the sky '
+                            'changed too much): {files}. Exclude them (remove them in the Files tab, or reject them '
+                            'in APU Pick)',
+    'msg.advice.cloud': '{group}: {n} frames have much fainter stars (cloud or haze?): {files}. Their weight is '
+                        'already lowered; excluding them is recommended',
+    'msg.advice.trail': '{group}: {n} frames have satellite or plane trails, already rejected; nothing to do: {files}',
+    'msg.advice.suspicious': '{group}: {n} frames have many rejected pixels (satellite, plane or cloud?): {files}',
+    'msg.advice.drizzle_osc': '{group}: {n} frames with shifts between them, suitable for Drizzle; on a colour camera '
+                              'Drizzle 1× already avoids the blur of debayering',
+    'msg.advice.crop': '{group}: the frames shift a lot, so the crop keeps only {pct:.0f}% of the frame (the area '
+                       'covered by at least {cov:.0f}% of the frames); lower the Crop Coverage Threshold to keep more, '
+                       'with noisier edges',
+})
+
+# 雙窄帶濾鏡另存 Ha／OIII
+_ZH.update({
+    'gui.toggle.dual_band': '雙窄帶濾鏡另存 Ha／OIII',
+    'cli.no_dual_band': '彩色相機＋雙窄帶濾鏡（Seestar 的 LP 等）時，不另存 Ha、OIII 兩個單色 master',
+    'msg.dual_band_output': '雙窄帶：另存 {channel} {name}',
+    'msg.advice.dual_band': '{group}：雙窄帶濾鏡，另存了 Ha 與 OIII 兩個單色 master（{files}），可以在 APU Processing 做 HOO 合成',
+})
+_EN.update({
+    'gui.toggle.dual_band': 'Save Ha / OIII For Dual-Band Filters',
+    'cli.no_dual_band': 'with a colour camera and a dual-band filter (e.g. Seestar LP), do not also save Ha and OIII '
+                        'mono masters',
+    'msg.dual_band_output': 'Dual-band: saved {channel} {name}',
+    'msg.advice.dual_band': '{group}: dual-band filter; Ha and OIII mono masters were saved too ({files}), ready for '
+                            'HOO in APU Processing',
+})
+
+# local normalization
+_ZH.update({
+    'gui.toggle.local_norm': '局部正規化',
+    'cli.local_norm': '局部正規化：每張的大尺度背景對齊到參考 frame（各張光害梯度不同時用；預設用全域正規化）',
+    'msg.local_norm': '{group}：局部正規化 {n} 張（對齊到 {ref} 的背景）',
+    'msg.local_norm_failed': '{group}：{n} 張與參考重疊太少，改用全域正規化（{names}）',
+})
+_EN.update({
+    'gui.toggle.local_norm': 'Local Normalization',
+    'cli.local_norm': "local normalization: match each frame's large-scale background to the reference frame "
+                      "(for gradients that differ between frames; global normalization by default)",
+    'msg.local_norm': '{group}: {n} frames locally normalized (to the background of {ref})',
+    'msg.local_norm_failed': '{group}: {n} frames overlap the reference too little; using global normalization ({names})',
 })
 
 _CATALOG = {"zh": _ZH, "en": _EN}

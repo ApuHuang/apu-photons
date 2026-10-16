@@ -43,7 +43,9 @@ def _moment_fwhm(img: np.ndarray, x: float, y: float) -> float | None:
     for _ in range(30):
         s2 = 2.0 * sigma ** 2  # 窗寬取星點 σ 的 √2 倍，m 與 σ 同量級，反解最穩
         r2 = (xx - cx) ** 2 + (yy - cy) ** 2
-        wc = c * np.exp(-r2 / (2.0 * s2))
+        # 單一亮點（熱像素）會讓窗寬縮到極小、除法溢位；exp 結果是 0，最後判為不是星點，不用印警告
+        with np.errstate(over="ignore", divide="ignore"):
+            wc = c * np.exp(-r2 / (2.0 * s2))
         tot = wc.sum()
         if tot <= 0:
             return None

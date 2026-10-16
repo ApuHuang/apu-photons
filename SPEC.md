@@ -57,12 +57,19 @@
 6. **自動裁切改版**與覆蓋率圖（§3 Stage 8）
 7. **載入 Recipe**（MVP 遺留項目，§7.2）
 
+追加（2026-10-09，APU Astro 整合版測試後的建議，§10.5）：
+
+8. **壞 frame 不拖垮整個 master**：權重算不出來的排除、對齊後檢查重疊、整合結果沒有有效像素時不輸出（§3 Stage 3、5、6）
+9. **建 master 校正檔改用 GPU／多行程**，找熱像素的中位數濾波也上 GPU（§3 Stage 1）
+10. **Stage 4 的背景位置在校正與找星時順便算**（工作行程裡，不再對齊後一張一張讀檔）
+11. **Local normalization**（選用，預設仍是全域；原列 V1，§3 Stage 4）
+
 ### V1
-- Local normalization（處理 Bortle 6 各晚梯度差異）
+- ~~Local normalization~~：0.2 做了（選用，§3 Stage 4）
 - 3× Drizzle（僅在欠取樣時開放）
 - 更多 rejection 演算法（linear fit clipping、ESD 等）
 - 進階權重模型
-- Channel Separation（RGB → R/G/B，彩色相機＋雙窄帶濾鏡的 Ha/OIII extraction）
+- Channel Separation（RGB → R/G/B；彩色相機＋雙窄帶濾鏡的 Ha/OIII 已在 0.2 做了，§3 Stage 8）
 - Dark scaling 進階選項
 - 跨專案的校正檔庫
 
@@ -146,6 +153,9 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   4. 都判斷不出來 → 標成「未知」，請使用者指定，不參與疊圖。
   - 例外：header 寫 `LIGHT`、但檔名或資料夾名稱明確寫了 dark / flat / bias / flat-dark 時，**以名稱為準**。
     `LIGHT` 是多數拍攝軟體的預設值，用一般序列拍的 flat 也會寫 `LIGHT`（NGC2244 實拍：FLAT 資料夾 280 張都是 `IMAGETYP=LIGHT`）。
+- **已經疊好的成品不再疊一次**（2026-10-16）：檔名 `Stacked_` 開頭（Seestar 自己疊的）、header 的 `STACKCNT` 或 `NCOMBINE` 大於 1
+  （也包括 Photons 自己的輸出）、或彩色三通道的 FITS → 標成 `rejected(reason=stacked)`，列在「未使用」並提醒一次。
+  使用者手動指定類型時照指定的。
 - **做好的 master**：
   - 檔名或 `IMAGETYP` 含 `master`（不分大小寫）→ master；
   - 判斷不出來、但同一套校正檔（同類型＋同配對條件）只有一張 → 視為 master；
@@ -171,6 +181,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 | flat-dark | 相機、增益、offset、與 flat 相同的曝光 | 溫度 ±2°C | 先找 flat-dark，沒有再找曝光相同的 dark，都沒有用 bias |
 
 - 校正檔先依類型與上表的條件分成「套」（溫度取整數度）；同一套整合成一個 master。
+- light 的校正組也依上表的條件分；**溫度只在有同條件（相機、增益、offset、曝光）的 dark 時才分組**。
+  沒有 dark 時溫度不影響配對，不製冷的相機（Seestar 一晚在 15～19°C 之間變動）不會被拆成好幾組、每組各提醒一次（2026-10-15）。
   flat 不依曝光分套（天光 flat 常常每張曝光不同）；同一套 flat 的曝光不一致時，flat-dark 無從配對，改扣 bias。
 - 有 dark 時 light 不扣 bias（dark 已含偏壓），配到的 bias 列為「未使用：有 dark，不需要 bias」；使用者手動指定時照指定的。
 - header 缺某個條件（例如做好的 master 少了 `GAIN`）時視為未知：仍可配對，但排在條件完全相同的候選之後。
@@ -192,6 +204,10 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   2. **校正組修改**：在校正分頁逐組改 dark／bias／flat／**flat 扣除**（flat 要扣哪一套 flat-dark、dark 或 bias，或不扣）。
      做好的 master flat 視為已扣過，不能再選。
 - 不做 dark scaling（同 0.1）。
+- **效能**（0.2）：校正檔用多個執行緒讀進暫存檔，再分段整合：有 NVIDIA GPU 在顯示卡上做，否則分給多個行程（每段最多 32 列，
+  小段比較能留在 CPU 快取）；結果與逐張單執行緒的做法逐位元相同。熱像素的中位數濾波有 GPU 時也在顯示卡上做（結果相同）。
+  NGC1499 的 master dark（300 s × 40 張，5544×3684）：約 100 秒 → GPU 約 6 秒、CPU 6 核心約 37 秒。
+  進度以 `masters` 階段回報（done／total 是這個 master 已整合的列數）。
 
 ### Stage 2 — Calibrate + Cosmetic
 - `cal = (light − dark) / normalized_flat`（無 dark 時減 bias）。
@@ -208,6 +224,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
 - 變換模型：預設 **similarity（平移＋旋轉＋等比縮放）**；affine 為選用，且需通過殘差檢查。錯配的風險大於對不上，配對失敗的 frame 標記 `rejected(reason=registration_failed)`。
 - 縮放倍率檢查：同一套器材的變換縮放必須在 1 ± 10%；合併不同器材時以兩者像素尺度的比例為準（不知道時只擋 0.2～5 倍以外的）。
   縮放接近 0 時所有星點會擠到同一顆星附近、殘差反而很小，不擋的話會在整合時出現無法反轉的變換（NGC2244 實拍：flat 被當成 light）。
+- 重疊檢查（0.2）：frame 與參考影像重疊的面積（除以兩者中較小的面積）不到 30% 時判為對齊失敗——配到別處的星，
+  殘差可能很小，但整合時那張整張在範圍外。
 - 中天翻轉：允許 ~180° 旋轉解。
 - **參考 frame：每個對齊組一張**（0.2）。自動選擇時在整個對齊組（所有濾鏡）裡，以 FWHM 低、偏心率低、星點數多、背景低綜合評分；可手動指定。不同濾鏡的片都對齊到這張。
 - Dither 分析：統計 transform 平移分量的小數部分分布，供 drizzle 適用性判斷（每個整合組各自判斷）。
@@ -218,6 +236,18 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   正規化參考：對齊參考在該整合組時用它，否則用該組裡依 Stage 3 綜合評分最高的 frame（不同濾鏡的亮度不能互相比）。
 - **估計時只使用未被污染的像素**：排除星點（依 Stage 3 星表遮罩）、飽和像素、以及 robust 統計下的離群像素（衛星、雲）。
 - 使用 robust 估計量（median / MAD 或 biweight）。
+- 背景位置（每個通道剔除 5σ 後的中位數）在 Stage 2～3 的工作行程裡順便算（校正完的資料已在記憶體），Stage 4 直接用。
+- **Local normalization**（0.2，選用，預設關閉；介面「局部正規化」、命令列 `--local-norm`、`Settings.normalization = "local"`）：
+  - 目的：各晚（或同一晚不同高度）光害梯度不同時，全域的 scale＋offset 對不齊，剔除會把梯度差當成離群值。
+  - scale 照舊（星點 flux 比）；offset 改成平滑的面：每張在工作行程裡分成格子（128 px，CFA 是每個色版平面的 128 px），
+    取每格剔除星點後的中位數；Stage 4 在參考座標的 24×36 個格點上，取「正規化參考的背景 − k × 這張的背景」
+    （各自用逆變換回自己的座標、雙線性取樣），以 3 階多項式擬合（反覆剔除 3σ 以外的格點）。
+    3 階而不是 2 階：沒有 flat 時暗角乘在天空背景上，天光變化（例如天亮前）時差異集中在角落，2 階補不到
+    （Seestar 天亮前 4 張：2 階仍剔除 7～8%，3 階 1～2%；4 階以上沒有更好；NGC 1893 兩者相同）。
+    星雲在兩張都有，相減後抵消；成品保留正規化參考那張的梯度，交給 APU Processing 去除。
+  - 重疊的格點太少時那張改用全域 offset 並提醒。整合與 drizzle 都在參考座標上算每個像素的 offset。
+  - 救不了過雲的片（雲是不均勻的乘法衰減，不是平滑的加法梯度）。
+  - recipe 的 `stages.normalize.method` 記 `global` 或 `local`；每張的係數記在 `inputs[].norm.local`。
 
 ### Stage 5 — Weight
 - 主權重由物理量計算，預設：`w ∝ SNR² / FWHM²`（SNR 由背景雜訊與星點 flux 估計；FWHM 用參考像素，合併光學系統時換算，§3.1.3）。
@@ -225,6 +255,8 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   - Gate：Pick 標記為淘汰的 frame 直接排除（`rejected(reason=pick)`）。
   - ~~可選加成 `w' = w × f(pick_score)`~~：2026-10-02 拿掉（與 SNR²／FWHM² 重複計算，有效張數變少，畫質沒有幫助）。
 - 權重在整合組內正規化到總和為 1，記錄至 Frame。
+- 權重算不出來（不是有限的正數，例如縮放 0 的變換讓 FWHM 變 0、權重無限大）的 frame 排除（`rejected(reason=bad_weight)`）並提醒。
+  不排除的話正規化後其他每一張的權重都變 0，整個 master 變成無效值（APU Processing 在 NGC2264 實際遇過，§10.5）。
 
 ### Stage 6 — Integrate
 - 分塊（tile / row-band）串流讀取，記憶體上限可設定，禁止一次載入全部 frame。
@@ -235,6 +267,7 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   - Master image（32-bit float）
   - **Per-frame pixel validity / rejection metadata**：遮罩 + 剔除類型（low / high / saturated / out-of-bounds），以參考座標存放（見 §4.4）。
   - 統計：每張 frame 被剔除的像素比例（供 QC 判讀衛星、雲）。
+- 整合後檢查：任何一個色版沒有有效像素時，這組不輸出並提醒，不默默存成全 0 的檔案。
 
 ### Stage 7 — Drizzle（選用）
 - CFA (Bayer) Drizzle：**不 debayer**，每個 CFA 像素依其顏色投入 R / G / B 輸出網格；單色相機為一般 drizzle。
@@ -257,6 +290,11 @@ Stage 8 Post / Output（對齊組共用裁切範圍）
   - 可關閉；需要完整視野（例如之後的 mosaic）時，交給 APU Processing 的非破壞裁切決定。
   - 保留自動裁切的理由：邊緣只被少數 frame 覆蓋，雜訊高、可能有對齊邊界痕跡，會干擾 APU Processing 的去光害梯度與自動拉伸。
 - **覆蓋率圖**（0.2）：每個 master 一律另外輸出 `_coverage.fits`（每個像素被幾張覆蓋，裁切後與 master 同尺寸）。
+- **雙窄帶濾鏡另存 Ha／OIII**（2026-10-16，預設開；介面「雙窄帶濾鏡另存 Ha／OIII」、命令列 `--no-dual-band` 關閉）：
+  彩色相機的整合組，濾鏡名稱認得出是雙窄帶（Seestar 的 `LP`——別家的 LP 多是寬頻光害濾鏡，只在 Seestar 時認；
+  名稱含 duo、dual、L-eXtreme、L-eNhance、L-Ultimate、ALP-T、NBZ、Ha-OIII）時，除了彩色 master，另存
+  `<目標>_<濾鏡>_Ha.fits`（紅色版）與 `_OIII.fits`（綠與藍依 Bayer 像素數 2:1 加權，同 Siril 的擷取），
+  單色、與彩色 master 像素對齊，給 APU Processing 做 HOO 合成。recipe 的 `outputs[].channels` 記這兩個檔名。
 - 輸出格式：32-bit float FITS（預設）、16-bit FITS（選用）。
 - 輸出的 FITS（master、`_stack`、`_weight`、`_coverage`）一律寫 `ROWORDER`：照參考 frame 的列順序（FITS 沒寫就是 `BOTTOM-UP`，相機 RAW 是 `TOP-DOWN`）。資料不翻轉，只標明方向。
 - **輸出位置與檔名**（0.2）：使用者選一個輸出資料夾，每個整合組一個 master：
@@ -450,6 +488,12 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
 ### 6.3 整合後
 - 每張 frame 的剔除像素比例（異常高 → 可能有衛星或雲）
 - Drizzle weight map 覆蓋率
+- **建議**（2026-10-16，結果分頁與命令列；只是提示，不自動排除、不改設定；recipe 的 `qc.groups[].advice`）：
+  - 剔除特別多的片分原因：星點亮度只剩正規化參考的一半以下 → 雲或霧，建議排除；
+    剔除遮罩分 8×8 格，5% 以上被剔除的格子占 10% 以上 → 大片（背景梯度或天光變化，例如天亮、月光），
+    建議打開局部正規化，已經開了就建議排除；其他 → 衛星或飛機的細線，已經剔除、不用處理；
+  - 彩色相機、張數與 dither 足夠、沒開 Drizzle → 提示 Drizzle 1× 就能避開解馬賽克的模糊；
+  - 裁切後剩不到原本的 85% → 提示可以調低裁切的覆蓋門檻。
 
 ### 6.4 試跑（Preview run）
 - 每個整合組抽樣 N 張（預設 20，依權重分層抽樣）跑 Stage 0–6，快速產生預覽 master。
@@ -518,7 +562,7 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   ],
   "stages": {
     "registration": { "algorithm": "triangle-ransac", "version": "1", "model": "similarity" },
-    "normalize":    { "algorithm": "robust-scale-offset", "version": "1" },
+    "normalize":    { "algorithm": "star-flux-scale+background-offset", "version": "1", "method": "global" },
     "weight":       { "formula": "snr2_over_fwhm2" },
     "integrate":    { "method": "weighted_average", "rejection": "winsorized_sigma", "low": 4.0, "high": 3.0 },
     "drizzle":      { "version": "drizzle-1" }
@@ -615,3 +659,49 @@ file,sha256,group,fwhm_px,fwhm_arcsec,eccentricity,star_count,background,snr,sco
   - 「沒有 flat 時用最近一晚的」（預設關）；開啟後 H／O／S 用 2/15 的 flat，各扣 2 s／1 s／2.5 s 的 dark，暗角消失（816 秒）；
   - flat 的濾鏡必須完全相同；沒用到的校正檔改成資訊並寫出具體原因（警告從 12 條降到 5 條）；
   - 校正分頁可改 flat 扣除；檔案分頁可對個別 light 指定校正檔。
+
+### 10.5 APU Astro 整合版的建議（2026-10-09）
+APU Astro 整合版（Qt，直接呼叫 `apu_photons`）用 0.2.0.dev1 實測後提了 4 項，全部做了（§2 的 8～11）：
+- **master 整張是 0**：原因是 Stage 5 的權重。縮放 0 的變換讓 FWHM 變 0、那張權重無限大，正規化後其他每張的權重都變 0，
+  整合時分母是 0，每個像素都是 NaN，存檔變 0。APU Processing 在 NGC2264（`E:\AstroPhotography\Christmas Tree`，
+  Ha 13／OIII 24／SII 15，只有 light）遇到。0.2.0.dev1 重跑已不重現（縮放檢查擋掉，§10.4），仍加三道防呆：
+  權重算不出來的排除、與參考重疊不到 30% 判對齊失敗、整合結果沒有有效像素的組不輸出。
+- **Stage 4 很慢、沒有進度**：背景位置改在工作行程裡算；NGC2264 52 張的 scale、offset、權重與改之前完全相同。
+- **建 master 校正檔太慢**：見 Stage 1 的效能。NGC1499（20 + 12 張，dark 40 張）整次 167 秒 → 86 秒。
+- **Local normalization**（選用，預設關閉）：
+  - 合成資料（每張加不同方向的線性梯度，約 8σ）：成品的左右梯度 −170 → −2（對齊到參考 frame 的無梯度背景），
+    平均剔除比例 2.4% → 0.6%（CFA＋drizzle：5.2% → 2.1%）。
+  - 實拍沒有看到差別：NGC2264（一晚）與 NGC 1893（`E:\AstroPhotography\NGC 1893`，ASI183MC，四晚 114 張）
+    的每晚剔除比例、成品雜訊都幾乎相同。NGC 1893 各張的 offset 面起伏 30～160 ADU，約在單張雜訊的 1σ 以內，
+    全域正規化的剔除本來就沒有被梯度誤導。所以**預設維持全域**；梯度差到數個 σ（強光害、月光、不同季節）時才會有差。
+  - NGC2264 剔除 35～70% 的是過雲的片（星點只剩參考的 1/4～1/21），局部正規化救不了；這些片的權重已自動降到 0.0002 以下。
+  - 還沒在 `G:\NGC2244`（兩晚 SHO）上試：當時 G: 沒有接上。
+- 進度：沒有加新的階段。`masters` 階段現在帶 done／total（這個 master 已整合的列數）；介面的剩餘時間在同一階段重新開始時重新計時。
+
+### 10.6 Seestar 的優化（2026-10-15）
+- 測試資料：`C:\Users\justi\Downloads\M63_339_20s_IRCUT_S50`（Seestar S50，IMX462，1080×1920 直式，GRBG，2.39″/px，
+  20 s × 339 張、赤道儀模式，沒有 dark／flat）；使用者先用 APU Pick 淘汰 99 張，剩 240 張。
+- 原本就正常：顏色正確（`BAYERPAT=GRBG`、沒有 `ROWORDER`）、背景沒有熱像素殘留或 walking noise（每張之間飄 ±100 px，等於自帶 dither）。
+- 改了（成品與改之前**逐位元相同**）：
+  1. 沒有 dark 時不依溫度分校正組：4 組、8 條重複提醒 → 1 組、2 條（Stage 1）；
+  2. 對齊分給多個行程（`register.register_many`，每張用相同的隨機數種子）；
+  3. 解馬賽克改用跨步切片取各色像素，不再每次在 CPU 上建整張的顏色遮罩（GPU 上每段每張 25 ms → 0.7 ms）；
+  4. 單張熱像素修正的 3×3 中位數改用比較網路（與 scipy 結果相同，快約 4 倍）；背景位置也改用跨步切片取樣（順序不變）。
+- 時間（240 張、Drizzle 1×、RTX 3090）：
+
+| 階段 | 之前 | 之後 |
+|---|---|---|
+| 校正與找星 | 39 秒 | 21 秒 |
+| 對齊 | 29 秒 | 6 秒 |
+| 整合 | 31 秒 | 15 秒 |
+| Drizzle | 22 秒 | 9 秒 |
+| 總計 | 123 秒 | 53 秒 |
+
+- 校正與找星剩下的時間主要是找星（photutils，每張約 150 ms）與行程啟動（3～5 秒），6 核心的電腦開到 6 個行程以上就不會再快。
+- 2026-10-16 接著做了（不只 Seestar，任何相機都適用）：
+  - 已經疊好的成品不再疊一次（Stage 0；沒有 Seestar `Stacked_*.fit` 的樣本，依檔名與 `STACKCNT`／`NCOMBINE`／三通道判斷）；
+  - 結果裡的建議（§6.3）：這組的天亮前 4 張判為「大片被剔除」，建議開局部正規化；開了以後（3 階）這 4 張的剔除從 8～21% 降到 1～2%，
+    不再列為可疑，全部的平均剔除 1.45% → 1.25%；另外提示適合 Drizzle 1×、裁切後只剩 81%；
+  - 局部正規化改用 3 階多項式（Stage 4）；
+  - 雙窄帶濾鏡另存 Ha／OIII（Stage 8；原列 V1 的 Channel Separation 的一部分）。還沒有 LP 實拍資料驗證，只用合成資料測過數值。
+  - 「載入 Recipe…」移到上方標題列（檔案分頁的工具列太擠，「加入」被擠掉、「載入 Recipe」被截成「載入 Rec」）。

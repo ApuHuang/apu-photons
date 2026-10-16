@@ -255,3 +255,29 @@ def test_headless_defaults_without_calibration(tmp_path):
     proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(len(SHIFTS))
+
+
+def test_dual_band_saves_ha_and_oiii(tmp_path):
+    """彩色相機＋雙窄帶濾鏡：另存 Ha（紅）與 OIII（(2G+B)/3）兩個單色 master，與彩色 master 像素對齊；可以關掉。"""
+    from apu_photons.engine import is_dual_band
+    assert is_dual_band("LP", "Seestar S50") and not is_dual_band("LP", "ZWO ASI2600MC Pro")
+    assert is_dual_band("L-eXtreme") and is_dual_band("ALP-T 5nm") and is_dual_band("Duo-Band")
+    assert not is_dual_band("IRCUT", "Seestar S50") and not is_dual_band("L-Pro") and not is_dual_band("Ha")
+
+    light, inputs = _make(tmp_path, bayer="RGGB", with_cal=False)
+    for p in sorted(light.iterdir()):
+        with fits.open(p, mode="update") as h:
+            h[0].header["FILTER"] = "L-eXtreme"
+    res = run(inputs, tmp_path / "on", Settings(crop_common=False, target="m"), echo=None)
+    o = res.outputs[0]
+    assert set(o.channels) == {"Ha", "OIII"}
+    rgb = fits.getdata(o.output).astype(np.float64)
+    ha, oiii = fits.getdata(o.channels["Ha"]), fits.getdata(o.channels["OIII"])
+    assert ha.shape == oiii.shape == rgb.shape[1:]
+    np.testing.assert_allclose(ha, rgb[0], rtol=1e-6)
+    np.testing.assert_allclose(oiii, (2 * rgb[1] + rgb[2]) / 3, rtol=1e-5)
+    assert fits.getheader(o.channels["OIII"])["FILTER"] == "OIII"
+    recipe = json.loads(res.recipe.read_text(encoding="utf-8"))
+    assert recipe["outputs"][0]["channels"] == {"Ha": "m_L-eXtreme_Ha.fits", "OIII": "m_L-eXtreme_OIII.fits"}
+    off = run(inputs, tmp_path / "off", Settings(crop_common=False, target="m", dual_band=False), echo=None)
+    assert not off.outputs[0].channels and not list((tmp_path / "off").glob("*_Ha.fits"))

@@ -66,6 +66,8 @@ class Frame:
     stars: Stars | None = None
     transform: np.ndarray | None = None       # 3×3，frame 座標 → 參考座標
     registration_residual_px: float | None = None
+    bg_loc: list | None = None                # 每通道的背景位置（校正後，Stage 4 正規化用）
+    bg_grid: dict | None = None               # 背景格點（local normalization 用，localnorm.background_grid）
     norm: dict | None = None                  # {"scale": [...], "offset": [...]}，每通道一個
     weight: float | None = None
     rejected_pixel_fraction: float | None = None

@@ -73,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--low", type=float, default=4.0, help=tr("cli.low"))
     st.add_argument("--high", type=float, default=3.0, help=tr("cli.high"))
     st.add_argument("--no-weights", action="store_true", help=tr("cli.no_weights"))
+    st.add_argument("--local-norm", action="store_true", help=tr("cli.local_norm"))
+    st.add_argument("--no-dual-band", action="store_true", help=tr("cli.no_dual_band"))
     st.add_argument("--reference", help=tr("cli.reference"))
     st.add_argument("--downsample", action="store_true", help=tr("cli.downsample"))
     st.add_argument("--drizzle", type=int, choices=[1, 2], default=0, help=tr("cli.drizzle"))
@@ -93,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     kinds = _forced_kinds(a)
     inputs = [Path(p) for p in a.inputs] + [Path(p) for p in kinds]
     s = Settings(rejection=a.rejection, low=a.low, high=a.high, weighting="none" if a.no_weights else "snr2_over_fwhm2",
+                 normalization="local" if a.local_norm else "global", dual_band=not a.no_dual_band,
                  reference=a.reference, downsample=0.5 if a.downsample else 1.0,
                  crop_common=not a.no_crop, output_bits=a.bits, memory_mb=a.memory, split_nights=not a.one_session,
                  flat_any_night=a.flat_any_night,
@@ -117,8 +120,9 @@ def main(argv: list[str] | None = None) -> int:
     if q["rejected_by_reason"]:
         items = sep.join(f"{tr('reason.' + k)} {v}" for k, v in q["rejected_by_reason"].items())
         print(tr("cli.unused", items=items))
-    if q["suspicious_frames"]:
-        print(tr("cli.suspicious", files=sep.join(q["suspicious_frames"])))
+    for g in q["groups"]:
+        for advice in g.get("advice", []):
+            print(f"• {advice}")
     for g in q["groups"]:
         if "drizzle" in g:
             holes = sep.join(f"{v:.2%}" for v in g["drizzle"]["holes_fraction"])

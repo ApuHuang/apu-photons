@@ -52,6 +52,17 @@ def test_gpu_matches_cpu(data):
 
 
 @gpu_only
+def test_local_norm_gpu_matches_cpu(data):
+    """局部正規化的 offset 面在 CPU 多行程與 GPU（整合與 drizzle）算出來相同。"""
+    _, c = _run(data, "lcpu", gpu="cpu", workers=2, drizzle=2, normalization="local")
+    _, g = _run(data, "lgpu", gpu="gpu", workers=2, drizzle=2, normalization="local")
+    for x, y in ((fits.getdata(data / "lcpu" / "m_stack.fits"), fits.getdata(data / "lgpu" / "m_stack.fits")), (c, g)):
+        diff = np.abs(x.astype(float) - y.astype(float))
+        assert (diff > 0.1).mean() < 1e-4
+        assert np.percentile(diff, 99.9) < 0.05
+
+
+@gpu_only
 def test_clip_combine_gpu_equals_cpu():
     import cupy as cp
 
@@ -65,3 +76,41 @@ def test_clip_combine_gpu_equals_cpu():
     b, cb = clip_combine(x, w, xp=cp)
     np.testing.assert_allclose(a, b.get(), rtol=1e-5, equal_nan=True)
     np.testing.assert_array_equal(ca, cb.get())
+
+
+def _cal_frames(tmp_path, n=7):
+    from . import synth
+    rng = np.random.default_rng(5)
+    paths = []
+    for i in range(n):
+        d = rng.normal(synth.PEDESTAL, synth.READ_NOISE, (synth.H, synth.W)).astype(np.float32)
+        d[rng.integers(0, synth.H, 30), rng.integers(0, synth.W, 30)] += 20000  # 宇宙射線，要被剔除
+        p = tmp_path / f"D_{i}.fits"
+        synth.write(p, d, EXPTIME=300.0)
+        paths.append(p)
+    return paths
+
+
+def test_master_combine_parallel_matches_single(tmp_path):
+    """master 校正檔：多行程與單行程結果相同；扣 flat-dark 的前處理照樣套用；進度報到最後一列。"""
+    from apu_photons.calibration import _combine_files
+    paths = _cal_frames(tmp_path)
+    one = _combine_files(paths, workers=1)
+    seen = []
+    many = _combine_files(paths, workers=3, memory_mb=1, progress=lambda d, t: seen.append((d, t)))
+    np.testing.assert_array_equal(one, many)
+    assert seen[-1][0] == seen[-1][1] == one.shape[0] and len(seen) > 1
+    sub = _combine_files(paths, preprocess=lambda d: d - 100.0, workers=2)
+    np.testing.assert_allclose(sub, one - 100.0, atol=1e-3)
+
+
+@gpu_only
+def test_master_combine_and_hot_pixels_on_gpu(tmp_path):
+    from apu_photons.calibration import _combine_files, hot_from_dark
+    be = backend.select("auto")
+    paths = _cal_frames(tmp_path)
+    cpu = _combine_files(paths, workers=1)
+    gpu = _combine_files(paths, be=be)
+    np.testing.assert_allclose(gpu, cpu, rtol=1e-6, atol=1e-3)
+    np.testing.assert_array_equal(hot_from_dark(cpu, None), hot_from_dark(cpu, None, be))
+    np.testing.assert_array_equal(hot_from_dark(cpu, "RGGB"), hot_from_dark(cpu, "RGGB", be))

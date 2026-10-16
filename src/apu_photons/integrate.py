@@ -17,6 +17,7 @@ from .backend import CPU, Backend
 from .combine import HIGH, LOW, OUT_OF_BOUNDS, clip_combine
 from .debayer import bilinear
 from .i18n import Msg
+from .localnorm import eval_offset
 
 WARP_MARGIN = 8
 
@@ -30,9 +31,16 @@ class FrameJob:
     offset: list[float]
     weight: float
     bayer: str | None = None          # 這張自己的 Bayer 排列；None = 與輸出相同（合併不同相機時才會不同）
+    local: list | None = None         # local normalization：每通道一組多項式係數（參考座標），取代 offset
 
     def pattern(self, default: str | None) -> str | None:
         return self.bayer or default
+
+    def offset_at(self, xp, c: int, x, y, shape: tuple[int, int]):
+        """通道 c 在參考座標 (x, y) 的 offset。"""
+        if self.local:
+            return eval_offset(xp, self.local[c], x, y, shape).astype(xp.float32)
+        return self.offset[c]
 
 
 @dataclass
@@ -67,8 +75,10 @@ def read_patch(job: FrameJob, cal: np.ndarray, r0: int, r1: int, width: int):
     return np.array(cal[y0:y1, x0:x1], np.float32), x0, y0
 
 
-def warp_band(be: Backend, job: FrameJob, patch, bayer: str | None, r0: int, r1: int, width: int):
-    """把一張 frame 在參考座標第 r0~r1 列的部分算出來（已正規化），回傳 (C, rows, width)，範圍外為 NaN。"""
+def warp_band(be: Backend, job: FrameJob, patch, bayer: str | None, r0: int, r1: int, width: int,
+              shape: tuple[int, int] | None = None):
+    """把一張 frame 在參考座標第 r0~r1 列的部分算出來（已正規化），回傳 (C, rows, width)，範圍外為 NaN。
+    shape：參考座標的尺寸（local normalization 的座標換算用）。"""
     xp, ndi = be.xp, be.ndi
     nch = 3 if bayer else 1
     rows = r1 - r0
@@ -84,10 +94,13 @@ def warp_band(be: Backend, job: FrameJob, patch, bayer: str | None, r0: int, r1:
     valid = ndi.affine_transform(ones, matrix, off, output_shape=(rows, width), order=1,
                                  mode="constant", cval=0.0) > 0.999
     out = xp.empty((nch, rows, width), xp.float32)
+    xx = xp.arange(width, dtype=xp.float32)[None, :]
+    yy = xp.arange(r0, r1, dtype=xp.float32)[:, None]
     for c in range(nch):
         warped = ndi.affine_transform(chans[c], matrix, off, output_shape=(rows, width), order=3,
                                       mode="nearest", prefilter=True)
-        out[c] = xp.where(valid, warped * job.scale[c] + job.offset[c], xp.nan)
+        offset = job.offset_at(xp, c, xx, yy, shape or (r1, width))
+        out[c] = xp.where(valid, warped * job.scale[c] + offset, xp.nan)
     return out
 
 
@@ -135,7 +148,7 @@ def _cpu_band(band: tuple[int, int]):
     r0, r1 = band
     jobs, spec = _W["jobs"], _W["spec"]
     w = spec.shape[1]
-    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w), j.pattern(spec.bayer), r0, r1, w)
+    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w), j.pattern(spec.bayer), r0, r1, w, spec.shape)
                       for j, c in zip(jobs, _W["cals"])])
     master, codes = combine_band(CPU, stack, _W["weights"], spec)
     cov, counts = _write_band(spec, r0, master, codes)
@@ -170,7 +183,7 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
                 patches = [f.result() for f in pending]
                 if k + 1 < len(bands):
                     pending = fetch(bands[k + 1])  # 算這段時先讀下一段
-                stack = be.xp.stack([warp_band(be, j, p, j.pattern(spec.bayer), r0, r1, w)
+                stack = be.xp.stack([warp_band(be, j, p, j.pattern(spec.bayer), r0, r1, w, spec.shape)
                                      for j, p in zip(jobs, patches)])
                 master, codes = combine_band(be, stack, weights, spec)
                 del stack

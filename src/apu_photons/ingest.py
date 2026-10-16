@@ -19,7 +19,8 @@ from .model import UNKNOWN, AlignGroup, CalibrationSet, Frame, IntegrationGroup,
 
 HEADER_KEYS = ("IMAGETYP", "EXPTIME", "EXPOSURE", "GAIN", "OFFSET", "CCD-TEMP", "XBINNING", "YBINNING", "BAYERPAT",
                "XBAYROFF", "YBAYROFF", "DATE-OBS", "FILTER", "INSTRUME", "TELESCOP", "FOCALLEN", "XPIXSZ",
-               "PIERSIDE", "SITELONG", "NAXIS1", "NAXIS2", "SATLEVEL", "ISO", "ROWORDER", "OBJECT", "LENS")
+               "PIERSIDE", "SITELONG", "NAXIS1", "NAXIS2", "SATLEVEL", "ISO", "ROWORDER", "OBJECT", "LENS",
+               "NAXIS", "STACKCNT", "NCOMBINE")
 
 CAL_KINDS = ("dark", "bias", "flat", "flat_dark")
 
@@ -127,6 +128,26 @@ def classify(path: Path, header: dict) -> tuple[str, str | None, bool]:
     if by_name:
         return by_name, source, is_master and by_name != "light"
     return UNKNOWN, None, False
+
+
+_STACKED = re.compile(r"^stacked[\s_\-]", re.I)
+
+
+def is_stacked(path: Path, header: dict) -> bool:
+    """已經疊好的成品，不能當 light 再疊一次：Seestar 自己疊的 `Stacked_*.fit`、header 寫了疊過幾張
+    （STACKCNT、NCOMBINE 大於 1，也包括 Photons 自己的輸出）、或彩色三通道的 FITS。"""
+    if _STACKED.match(path.name):
+        return True
+    for key in ("STACKCNT", "NCOMBINE"):
+        try:
+            if int(header.get(key) or 0) > 1:
+                return True
+        except (TypeError, ValueError):
+            pass
+    try:
+        return int(header.get("NAXIS") or 2) == 3
+    except (TypeError, ValueError):
+        return False
 
 
 def _kind_from_name(path: Path) -> tuple[str | None, str | None]:
@@ -414,11 +435,17 @@ def _rank(cands: list[CalibrationSet], want: dict, date: str | None, temp: float
     return [t[-1] for t in ok], too_far
 
 
-def light_group_key(f: Frame) -> str:
-    """條件相同的 light 共用一個校正組（使用者手動修改也以這個為單位）。"""
+def light_group_key(f: Frame, with_temp: bool = True) -> str:
+    """條件相同的 light 共用一個校正組（使用者手動修改也以這個為單位）。
+
+    with_temp=False：沒有同條件的 dark 時溫度不影響配對，就不依溫度分組
+    （Seestar 這類不製冷的相機溫度一直在變，以前會拆成好幾組、每組各提醒一次沒有 dark）。"""
+    key = (f"{f.train} | {f.filter or '—'} | {f.night} | {_fmt(f.exposure)}s | gain {_fmt(f.gain)} | "
+           f"offset {_fmt(f.offset)}")
+    if not with_temp:
+        return key
     t = None if f.temp is None else round(f.temp)
-    return (f"{f.train} | {f.filter or '—'} | {f.night} | {_fmt(f.exposure)}s | gain {_fmt(f.gain)} | "
-            f"offset {_fmt(f.offset)} | {_fmt(t)}°C")
+    return f"{key} | {_fmt(t)}°C"
 
 
 SUB_KINDS = ("flat_dark", "dark", "bias")  # flat 可以扣的校正檔
@@ -448,10 +475,20 @@ def match_calibration(project: Project, warnings: list, temp_tolerance: float = 
     groups: dict[str, list[Frame]] = defaultdict(list)
     manual_of: dict[str, dict] = {}
     manual_ids: dict[str, int] = {}
+    has_dark: dict[tuple, bool] = {}
+
+    def dark_exists(f: Frame) -> bool:
+        """有沒有相機、增益、offset、曝光都相同的 dark（不管溫度）；沒有的話溫度不影響配對。"""
+        key = (f.camera, f.gain, f.offset, f.exposure)
+        if key not in has_dark:
+            want = {"camera": f.camera, "gain": f.gain, "offset": f.offset, "exptime": f.exposure}
+            has_dark[key] = bool(_rank(by_kind["dark"], want, None, None, temp_tolerance)[0])
+        return has_dark[key]
+
     for f in project.lights:
         if not f.accepted:
             continue
-        gk = light_group_key(f)
+        gk = light_group_key(f, dark_exists(f))
         assigned = fc.get(path_key(f.path))
         if assigned:
             sig = json.dumps(assigned, sort_keys=True)
@@ -670,6 +707,7 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
     if not files:
         warnings.append(Msg("msg.no_input_files"))
     frames: list[Frame] = []
+    stacked: list[Frame] = []
     for p in files:
         try:
             f = _frame(p)
@@ -682,7 +720,14 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
         if user:
             kind, source = user, "user"
         f.kind, f.kind_source, f.is_master = kind, source, is_master and kind != "light"
+        if not user and kind in ("light", UNKNOWN) and is_stacked(p, f.header):
+            f.kind = "light"
+            f.reject("stacked")  # 列在「未使用」並寫出原因；使用者手動指定類型時照使用者的
+            stacked.append(f)
         frames.append(f)
+    if stacked:
+        warnings.append(Msg("msg.stacked_skipped", n=len(stacked), names=", ".join(f.name for f in stacked[:3])
+                            + ("…" if len(stacked) > 3 else "")))
 
     unknown = [f for f in frames if f.kind == UNKNOWN]
     if unknown:
@@ -695,7 +740,7 @@ def ingest(paths: list[Path], warnings: list, *, kinds: dict | None = None, filt
 
     lights = [f for f in frames if f.kind == "light"]
     project = Project(name=name or target_name(lights), files=frames, filter_aliases=dict(filter_aliases or {}))
-    project.trains = _trains([f for f in lights if f.shape])
+    project.trains = _trains([f for f in lights if f.shape and f.accepted])
 
     # APU Pick sidecar：每個 light 所在的資料夾各一份
     sidecars: dict[Path, dict | None] = {}

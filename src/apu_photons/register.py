@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from itertools import combinations
 
 import numpy as np
@@ -77,6 +78,19 @@ def _plausible(m: np.ndarray, expected: float | None) -> bool:
     return abs(s / expected - 1.0) <= SCALE_TOL
 
 
+def overlap_fraction(m: np.ndarray, src_shape: tuple[int, int], ref_shape: tuple[int, int], n: int = 24) -> float:
+    """frame 與參考影像重疊的面積，除以兩者中較小的面積（合併不同視野的器材時，小視野整張落在大視野內算 100%）。
+
+    用 frame 上 n×n 個格點估計落在參考範圍內的比例。"""
+    h, w = src_shape
+    ys, xs = np.meshgrid(np.linspace(0, h - 1, n), np.linspace(0, w - 1, n), indexing="ij")
+    p = apply(m, np.column_stack([xs.ravel(), ys.ravel()]))
+    rh, rw = ref_shape
+    inside = float(((p[:, 0] >= 0) & (p[:, 0] <= rw - 1) & (p[:, 1] >= 0) & (p[:, 1] <= rh - 1)).mean())
+    src_area = h * w * scale_of(m) ** 2  # frame 在參考座標裡的面積
+    return inside * src_area / max(min(src_area, rh * rw), 1e-9)
+
+
 def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | None = None,
              expected_scale: float | None = 1.0) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
     """src_xy、ref_xy 依亮度由亮到暗排序。回傳（3×3 變換, 殘差 RMS 像素, 配對的 src 索引, 對應的 ref 索引）。
@@ -132,3 +146,34 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
     if rms > MAX_RESIDUAL:
         raise RegistrationError(Msg("msg.reg.residual", rms=rms))
     return m, rms, np.flatnonzero(ok), j[ok]
+
+
+def _register_task(task):
+    src_xy, ref_xy, expected = task
+    try:
+        return register(src_xy, ref_xy, expected_scale=expected), None
+    except RegistrationError as exc:
+        return None, exc.args[0] if exc.args else str(exc)
+
+
+def register_many(tasks: list[tuple], workers: int, progress=None) -> list[tuple]:
+    """多張一起對齊：tasks 是 [(src_xy, ref_xy, expected_scale)]，回傳 [(register 的結果或 None, 失敗原因或 None)]。
+
+    每張都用相同的隨機數種子，多行程與逐張的結果完全相同。張數多、每張又小（例如 Seestar 幾百張）時，
+    對齊是單執行緒的 Python 迴圈，占整次時間的四分之一；分給多個行程。progress(done, total)。"""
+    if workers <= 1 or len(tasks) < 2 * workers:
+        results = map(_register_task, tasks)
+        pool = None
+    else:
+        pool = ProcessPoolExecutor(max_workers=min(workers, len(tasks)))
+        results = pool.map(_register_task, tasks, chunksize=max(1, len(tasks) // (workers * 4)))
+    out = []
+    try:
+        for r in results:
+            out.append(r)
+            if progress:
+                progress(len(out), len(tasks))
+    finally:
+        if pool is not None:
+            pool.shutdown(cancel_futures=True)
+    return out

@@ -270,9 +270,12 @@ def test_load_recipe(app, tmp_path):
     from apu_photons.engine import Settings, run
 
     light, inputs = _make(tmp_path, with_cal=False)
-    res = run(inputs, tmp_path / "out", Settings(crop_common=False, low=3.5, target="R"), echo=None)
+    res = run(inputs, tmp_path / "out", Settings(crop_common=False, low=3.5, target="R", normalization="local"),
+              echo=None)
+    assert not app.local_norm_var.get() and app.settings().normalization == "global"
     app.load_recipe_file(res.recipe, reproduce=False)
     assert app.low_var.get() == 3.5 and not app.files and not app.crop_var.get()
+    assert app.local_norm_var.get() and app.settings().normalization == "local"
     app.load_recipe_file(res.recipe, reproduce=True)
     assert len(app.files) == 8 and app.target_var.get() == "R"
     app.wait_plan()

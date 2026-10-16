@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
@@ -26,19 +27,22 @@ from astropy.io import fits
 from . import __version__, backend
 from . import drizzle as drizzle_mod
 from . import integrate as integrate_mod
+from . import localnorm
 from .backend import default_workers
+from .combine import HIGH, LOW, OUT_OF_BOUNDS
 from .calibration import ALGO_VERSION as CALIB_VERSION, MasterBuilder
 from .drizzle import DrizzleSpec
-from .imageio import cfa_masks, row_order, write_fits
-from .i18n import Msg
+from .imageio import row_order, write_fits
+from .i18n import Msg, tr
 from .ingest import filter_names, ingest, safe_name, unused_text
 from .integrate import BandSpec, FrameJob
 from .model import ACCEPTED, AlignGroup, Frame, IntegrationGroup, Project
-from .prepare import prepare
-from .register import ALGO_VERSION as REG_VERSION, RegistrationError, register
+from .prepare import channel_locations, prepare
+from .register import ALGO_VERSION as REG_VERSION, overlap_fraction, register_many
 
 MIN_STARS = 10
 MIN_GROUP_FRAMES = 2
+MIN_OVERLAP = 0.3  # 與參考重疊不到這個比例：對齊結果是錯的（配到別處的星）
 RECIPE_SCHEMA = "apuphotons-recipe/2"
 # 每個對齊組可以各自設定的輸出項目（SPEC §3 Stage 7、8）
 ALIGN_OUTPUT_KEYS = ("drizzle", "pixfrac", "fill_holes", "downsample", "crop_common", "crop_min_coverage")
@@ -50,6 +54,8 @@ class Settings:
     low: float = 4.0
     high: float = 3.0
     weighting: str = "snr2_over_fwhm2"  # snr2_over_fwhm2 / none
+    normalization: str = "global"      # global（每通道一個 offset）/ local（offset 是平滑的面，對齊各張的梯度）
+    dual_band: bool = True             # 彩色相機＋雙窄帶濾鏡（認得出的名稱）時，另存 Ha 與 OIII 兩個單色 master
     reference: str | list | None = None  # 參考 frame 的檔名（可以多個，各自套用到所在的對齊組）；None = 自動
     downsample: float = 1.0            # 1.0 或 0.5
     crop_common: bool = True
@@ -95,6 +101,7 @@ class GroupResult:
     weight: Path | None                # drizzle 的 weight map
     frames: list[Frame]
     qc: dict
+    channels: dict = field(default_factory=dict)  # 雙窄帶濾鏡另存的單色 master：{"Ha": 路徑, "OIII": 路徑}
 
 
 @dataclass
@@ -215,12 +222,13 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
 
     # ---- Stage 1 + 2 + 3 偵測：每個校正組各自的 master ----
     report("masters")
-    builder = MasterBuilder(project.calibration_sets, cache, warnings, log)
     cdir = cache / "calibrated"
     cdir.mkdir(exist_ok=True)
     workers = s.workers or default_workers()
     be = backend.select(s.gpu)
     log(Msg("msg.compute", workers=workers, gpu=Msg("msg.compute_gpu", device=be.device) if be.gpu else ""))
+    builder = MasterBuilder(project.calibration_sets, cache, warnings, log, be=be, workers=workers,
+                            memory_mb=s.memory_mb, progress=lambda d, t: report("masters", d, t))
     by_cal: dict[str, list[Frame]] = {}
     for f in project.accepted:
         by_cal.setdefault(f.calib["group"], []).append(f)
@@ -238,10 +246,11 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
         tasks = [(str(f.path), str(cdir / f"{_calib_key(f, sig)}.npy")) for f in frames]
         base = done
         results = prepare(tasks, masters, frames[0].bayer, workers, log,
-                          lambda d, t, base=base: report("prepare", base + d, total))
+                          lambda d, t, base=base: report("prepare", base + d, total), grid=s.normalization == "local")
         done += len(frames)
-        for f, (_src, dst), (stars, err) in zip(frames, tasks, results):
+        for f, (_src, dst), (stars, loc, bg, err) in zip(frames, tasks, results):
             f.calibrated_path = Path(dst)
+            f.bg_loc, f.bg_grid = loc, bg
             if err is not None:
                 f.reject("unreadable")
                 warnings.append(Msg("msg.calib_failed", name=f.name, error=err))
@@ -375,19 +384,22 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
     ag.reference = ref
     log(Msg("msg.reference_align", group=ag.id, name=ref.name, fwhm=ref.stars.fwhm, n=len(ref.stars)))
     ref_xy = np.column_stack([ref.stars.x, ref.stars.y])
-    flux_ratio: dict[int, float] = {}
-    for i, f in enumerate(frames, 1):
-        report("register", i, len(frames))
-        if f is ref:
-            f.transform, f.registration_residual_px = np.eye(3), 0.0
-            flux_ratio[id(f)] = 1.0
-            continue
-        try:
-            m, rms, si, ri = register(np.column_stack([f.stars.x, f.stars.y]), ref_xy,
-                                      expected_scale=_expected_scale(f, ref, project))
-        except RegistrationError as exc:
+    flux_ratio: dict[int, float] = {id(ref): 1.0}
+    ref.transform, ref.registration_residual_px = np.eye(3), 0.0
+    others = [f for f in frames if f is not ref]
+    tasks = [(np.column_stack([f.stars.x, f.stars.y]), ref_xy, _expected_scale(f, ref, project)) for f in others]
+    report("register", 0, len(others))
+    results = register_many(tasks, workers, lambda d, t: report("register", d, t))
+    for f, (res, err) in zip(others, results):
+        if res is None:
             f.reject("registration_failed")
-            warnings.append(Msg("msg.reg_failed", name=f.name, error=exc))
+            warnings.append(Msg("msg.reg_failed", name=f.name, error=err))
+            continue
+        m, rms, si, ri = res
+        overlap = overlap_fraction(m, f.shape, ref.shape)
+        if overlap < MIN_OVERLAP:
+            f.reject("registration_failed")
+            warnings.append(Msg("msg.reg_failed", name=f.name, error=Msg("msg.reg.overlap", pct=overlap * 100)))
             continue
         f.transform, f.registration_residual_px = m, round(rms, 4)
         with np.errstate(all="ignore"):
@@ -411,13 +423,22 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
         # ---- Stage 4：整合組內正規化（不同濾鏡的亮度不互相比）----
         nref = ref if ref in gframes else _rank_frames(gframes)[0]
         k_ref = flux_ratio[id(nref)]
-        ref_loc = _channel_locations(np.load(nref.calibrated_path, mmap_mode="r"), nref.bayer)
+        ref_loc = _bg_loc(nref)
         for f in gframes:
-            loc = ref_loc if f is nref else _channel_locations(np.load(f.calibrated_path, mmap_mode="r"), f.bayer)
+            loc = _bg_loc(f)
             k = flux_ratio[id(f)] / k_ref
             f.norm = {"scale": [k] * len(loc), "offset": [lr - k * li for lr, li in zip(ref_loc, loc)]}
+        if s.normalization == "local":
+            _local_normalize(gframes, nref, shape, f"{ag.id} / {g.label}", log, warnings)
         # ---- Stage 5 ----
-        _weights(gframes, s)
+        # 權重算不出來的那張排除：留著的話正規化後其他張的權重全變 0，整個 master 變成無效值
+        for f in _weights(gframes, s):
+            f.reject("bad_weight")
+            warnings.append(Msg("msg.bad_weight", name=f.name))
+        gframes = [f for f in gframes if f.accepted]
+        if len(gframes) < MIN_GROUP_FRAMES:
+            warnings.append(Msg("msg.group_too_few", group=f"{ag.id} / {g.label}", n=len(gframes)))
+            continue
         # ---- Stage 6 ----
         for f in gframes:
             f.status = ACCEPTED
@@ -426,6 +447,9 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
         gdir.mkdir(parents=True, exist_ok=True)
         master_path, coverage, rej_counts, map_paths = _integrate(gframes, bayer, shape, s, gdir, be, workers, log,
                                                                   lambda d, t: report("integrate", d, t))
+        if not _has_data(master_path):
+            warnings.append(Msg("msg.group_no_data", group=f"{ag.id} / {g.label}"))
+            continue
         for f, (n_rej, n_valid) in zip(gframes, rej_counts):
             f.rejected_pixel_fraction = round(n_rej / n_valid, 6) if n_valid else None
         out.append({"group": g, "frames": gframes, "master": master_path, "coverage": coverage,
@@ -458,25 +482,36 @@ def _slug(text: str) -> str:
     return hashlib.sha1(text.encode()).hexdigest()[:8]
 
 
-def _channel_locations(data: np.ndarray, bayer: str | None) -> list[float]:
-    """每個輸出通道的背景位置（中位數，先剔除 5σ 以上的星點與軌跡）。"""
-    if not bayer:
-        return [_robust_loc(np.asarray(data[::3, ::3]))]
-    h, w = data.shape
-    arr = np.asarray(data[: h - h % 2, : w - w % 2])
-    masks = cfa_masks(bayer, arr.shape)
-    return [_robust_loc(arr[masks[c]][::7]) for c in "RGB"]
+def _local_normalize(frames: list[Frame], nref: Frame, shape, label: str, log, warnings) -> None:
+    """local normalization：每張的 offset 改成平滑的面（f.norm["local"]，每通道一組多項式係數）。
+    算不出來的（重疊太少、沒有背景格點）保留全域 offset。"""
+    nref_inv = np.linalg.inv(nref.transform)
+    failed = []
+    for f in frames:
+        if f is nref:
+            continue
+        coeffs = None
+        if f.bg_grid is not None and nref.bg_grid is not None:
+            coeffs = localnorm.fit_offset(f.bg_grid, np.linalg.inv(f.transform), f.shape, nref.bg_grid, nref_inv,
+                                          nref.shape, f.norm["scale"][0], shape)
+        if coeffs is None:
+            failed.append(f.name)
+        else:
+            f.norm["local"] = coeffs
+    log(Msg("msg.local_norm", group=label, n=len(frames) - 1 - len(failed), ref=nref.name))
+    if failed:
+        warnings.append(Msg("msg.local_norm_failed", group=label, n=len(failed), names=", ".join(failed[:5])))
 
 
-def _robust_loc(a: np.ndarray) -> float:
-    a = a[np.isfinite(a)]
-    med = np.median(a)
-    sig = 1.4826 * np.median(np.abs(a - med))
-    a = a[np.abs(a - med) < 5 * max(sig, 1e-6)]
-    return float(np.median(a))
+def _bg_loc(f: Frame) -> list[float]:
+    """背景位置：校正與找星時已經在工作行程裡算好；沒有時（不應該發生）才在這裡讀檔計算。"""
+    if f.bg_loc is None:
+        f.bg_loc = channel_locations(np.load(f.calibrated_path, mmap_mode="r"), f.bayer)
+    return f.bg_loc
 
 
-def _weights(frames: list[Frame], s: Settings) -> None:
+def _weights(frames: list[Frame], s: Settings) -> list[Frame]:
+    """設定每張的權重（總和 1）；回傳權重算不出來（不是有限的正數）的 frame，它們的權重是 None。"""
     if s.weighting == "none":
         raw = np.ones(len(frames))
     else:
@@ -486,10 +521,19 @@ def _weights(frames: list[Frame], s: Settings) -> None:
                          for f in frames])
         fwhm = np.where(np.isfinite(fwhm), fwhm, np.nanmedian(fwhm) if np.isfinite(fwhm).any() else 1.0)
         # 正規化後的 SNR ∝ 1/noise；權重 = SNR² / FWHM²
-        raw = 1.0 / (noise ** 2 * fwhm ** 2)
-    w = raw / raw.sum()
-    for f, v in zip(frames, w):
-        f.weight = float(v)
+        with np.errstate(all="ignore"):
+            raw = 1.0 / (noise ** 2 * fwhm ** 2)
+    ok = np.isfinite(raw) & (raw > 0)
+    total = raw[ok].sum()
+    for f, v, good in zip(frames, raw, ok):
+        f.weight = float(v / total) if good else None
+    return [f for f, good in zip(frames, ok) if not good]
+
+
+def _has_data(master_path) -> bool:
+    """每個色版都至少有一個有效像素。整張無效時不要默默存成 0。"""
+    m = np.load(master_path, mmap_mode="r")
+    return all(bool(np.isfinite(m[c]).any()) for c in range(m.shape[0]))
 
 
 def _scale_of(t: np.ndarray | None) -> float:
@@ -498,7 +542,7 @@ def _scale_of(t: np.ndarray | None) -> float:
 
 def _jobs(frames: list[Frame]) -> list[FrameJob]:
     return [FrameJob(str(f.calibrated_path), f.transform, list(f.norm["scale"]), list(f.norm["offset"]), float(f.weight),
-                     f.bayer) for f in frames]
+                     f.bayer, f.norm.get("local")) for f in frames]
 
 
 def _integrate(frames, bayer, shape, s: Settings, gdir: Path, be, workers: int, log, progress=None):
@@ -597,6 +641,8 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
     coverage = it["coverage"]
     qc = _qc(g, frames, coverage)
     label = f"{ag.id} / {g.label}"
+    qc["suspicious_causes"] = _suspicious_causes(frames, it["maps"], set(qc["suspicious_frames"]))
+    qc["advice"] = _advice(label, frames, qc, s, bayer, crop, shape)
     if s.drizzle and not qc["drizzle_suitable"]:
         warnings.append(Msg("msg.drizzle_few_group", group=label, n=len(frames), dither=qc["dither_spread_px"]))
 
@@ -640,6 +686,10 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
             master, cov = _downsample(master), _downsample_min(cov)
     write_fits(output, master, hdr, bits=s.output_bits)
     log(Msg("msg.output", path=output, w=master.shape[-1], h=master.shape[-2]))
+    channels = {}
+    if s.dual_band and bayer and master.ndim == 3 and is_dual_band(g.filter, ag.reference.header.get("INSTRUME")):
+        channels = _write_dual_band(master, hdr, output, s, log)
+        qc["advice"].append(Msg("msg.advice.dual_band", group=label, files=_names([p.name for p in channels.values()])))
     cov_out = output.with_name(output.stem + "_coverage" + output.suffix)
     chdr = fits.Header()
     chdr["ROWORDER"] = hdr["ROWORDER"], hdr.comments["ROWORDER"]
@@ -647,7 +697,37 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
     fits.PrimaryHDU(cov.astype(np.uint16), header=chdr).writeto(cov_out, overwrite=True)
     qc["crop"] = crop
     return GroupResult(align=ag.id, filter=g.filter, output=output, coverage=cov_out, stack=stack_out,
-                       weight=weight_out, frames=frames, qc=qc)
+                       weight=weight_out, frames=frames, qc=qc, channels=channels)
+
+
+# 雙窄帶（Ha + OIII）濾鏡的名稱；Seestar 的「LP」也是雙窄帶，但別家的 LP 常是寬頻光害濾鏡，只在 Seestar 時認
+_DUAL_BAND = re.compile(r"(?<![a-z])(duo|dual|l-?extreme|l-?enhance|l-?ultimate|alp-?t|nbz|ha-?oiii)(?![a-z])", re.I)
+
+
+def is_dual_band(filter_name: str | None, instrument=None) -> bool:
+    """雙窄帶濾鏡：Seestar 的 LP、Optolong L-eXtreme／L-eNhance／L-Ultimate、Antlia ALP-T、IDAS NBZ 等。"""
+    if not filter_name:
+        return False
+    name = str(filter_name).strip()
+    if name.upper() == "LP" and "seestar" in str(instrument or "").lower():
+        return True
+    return bool(_DUAL_BAND.search(name))
+
+
+def _write_dual_band(master: np.ndarray, hdr: fits.Header, output: Path, s: Settings, log) -> dict[str, Path]:
+    """雙窄帶濾鏡：Ha 取紅色版；OIII 取綠與藍，依 Bayer 上的像素數 2:1 加權（同 Siril 的 Ha／OIII 擷取）。
+    各存一個單色 master，與彩色 master 像素對齊，可直接在 APU Processing 做 HOO 合成。"""
+    out = {}
+    for name, data in (("Ha", master[0]), ("OIII", (2.0 * master[1] + master[2]) / 3.0)):
+        h = hdr.copy()
+        h["FILTER"] = name
+        h.remove("COLORTYP", ignore_missing=True)
+        h["HISTORY"] = f"{name} extracted from the dual-band colour master {output.name}"
+        path = output.with_name(f"{output.stem}_{name}{output.suffix}")
+        write_fits(path, data.astype(np.float32), h, bits=s.output_bits)
+        log(Msg("msg.dual_band_output", channel=name, name=path.name))
+        out[name] = path
+    return out
 
 
 def _run_drizzle(frames, bayer, shape, s: Settings, map_paths, qc, warnings, workdir: Path, be, workers: int, log,
@@ -721,6 +801,76 @@ def _qc(g: IntegrationGroup, frames: list[Frame], coverage: np.ndarray) -> dict:
     }
 
 
+CLOUD_SCALE = 2.0   # 星點亮度只剩正規化參考的一半以下：雲或霧
+WIDE_TILE = 0.05    # 8×8 格裡，一格有 5% 以上的像素被剔除算「這格大片被剔除」
+WIDE_AREA = 0.1     # 這種格子占 10% 以上：大片（背景梯度、天光變化），不是衛星或飛機的細線
+CROP_HINT = 0.85    # 裁切後剩不到原本的 85%：提示可以調低覆蓋門檻
+
+
+def _suspicious_causes(frames: list[Frame], maps: list, names: set[str]) -> dict[str, str]:
+    """剔除像素特別多的片是什麼原因：cloud（星點明顯變暗）、sky（大片被剔除：背景梯度或天光變化，例如天亮、月光）、
+    trail（只有細線或零星：衛星、飛機，已經剔除）；沒有剔除遮罩時是 unknown。"""
+    causes: dict[str, str] = {}
+    for f, path in zip(frames, maps):
+        if f.name not in names:
+            continue
+        if f.norm and f.norm["scale"][0] > CLOUD_SCALE:
+            causes[f.name] = "cloud"
+            continue
+        if not path:
+            causes[f.name] = "unknown"
+            continue
+        m = np.asarray(np.load(path, mmap_mode="r")[::2, ::2])
+        h, w = (m.shape[0] // 8) * 8, (m.shape[1] // 8) * 8
+        m = m[:h, :w].reshape(8, h // 8, 8, w // 8)
+        rej = ((m == LOW) | (m == HIGH)).sum(axis=(1, 3))
+        valid = (m != OUT_OF_BOUNDS).sum(axis=(1, 3))
+        frac = np.where(valid > 0, rej / np.maximum(valid, 1), 0.0)
+        causes[f.name] = "sky" if (frac > WIDE_TILE).mean() >= WIDE_AREA else "trail"
+    return causes
+
+
+class _Names:
+    """檔名清單（最多列 3 個）；顯示時才依目前語言加分隔符號，切換語言後也對。"""
+
+    __slots__ = ("names",)
+
+    def __init__(self, names: list[str]):
+        self.names = list(names)
+
+    def __str__(self) -> str:
+        return tr("cli.sep").join(self.names[:3]) + ("…" if len(self.names) > 3 else "")
+
+
+def _names(names: list[str]) -> _Names:
+    return _Names(names)
+
+
+def _advice(label: str, frames: list[Frame], qc: dict, s: Settings, bayer, crop, shape) -> list:
+    """結果裡的建議（只是提示，不自動排除、不改設定）：可疑的片怎麼處理、適不適合 Drizzle、裁掉太多時怎麼辦。"""
+    out = []
+    by: dict[str, list[str]] = {}
+    for name in qc["suspicious_frames"]:
+        by.setdefault(qc["suspicious_causes"].get(name, "unknown"), []).append(name)
+    if by.get("sky"):
+        key = "msg.advice.sky_local" if s.normalization == "local" else "msg.advice.sky"
+        out.append(Msg(key, group=label, n=len(by["sky"]), files=_names(by["sky"])))
+    if by.get("cloud"):
+        out.append(Msg("msg.advice.cloud", group=label, n=len(by["cloud"]), files=_names(by["cloud"])))
+    if by.get("trail"):
+        out.append(Msg("msg.advice.trail", group=label, n=len(by["trail"]), files=_names(by["trail"])))
+    if by.get("unknown"):
+        out.append(Msg("msg.advice.suspicious", group=label, n=len(by["unknown"]), files=_names(by["unknown"])))
+    if bayer and not s.drizzle and qc["drizzle_suitable"]:
+        out.append(Msg("msg.advice.drizzle_osc", group=label, n=len(frames)))
+    if crop is not None and shape:
+        x0, y0, x1, y1 = crop
+        kept = (x1 - x0) * (y1 - y0) / float(shape[0] * shape[1])
+        if kept < CROP_HINT:
+            out.append(Msg("msg.advice.crop", group=label, pct=kept * 100, cov=s.crop_min_coverage * 100))
+    return out
+
+
 def _project_qc(project: Project, outputs: list[GroupResult]) -> dict:
     """整個專案的摘要（各組的細節在 groups）。"""
     reasons: dict[str, int] = {}
@@ -761,14 +911,18 @@ def _write_recipe(output_dir: Path, project: Project, outputs: list[GroupResult]
         "stages": {
             "calibration": {"version": CALIB_VERSION},
             "registration": {"algorithm": "triangle-ransac", "version": REG_VERSION, "model": "similarity"},
-            "normalize": {"algorithm": "star-flux-scale+background-offset", "version": "1"},
+            "normalize": {"algorithm": "star-flux-scale+background-offset", "version": "1",
+                          "method": s.normalization,
+                          **({"local": {"tile": localnorm.TILE, "degree": localnorm.DEGREE}}
+                             if s.normalization == "local" else {})},
             "weight": {"formula": s.weighting},
             "integrate": {"method": "weighted_average", "rejection": s.rejection, "low": s.low, "high": s.high},
             "drizzle": {"version": drizzle_mod.ALGO_VERSION},
         },
         "outputs": [{"align_group": o.align, "filter": o.filter, "frames": len(o.frames), "file": o.output.name,
                      "coverage": o.coverage.name if o.coverage else None,
-                     "stack": o.stack.name if o.stack else None, "weight": o.weight.name if o.weight else None}
+                     "stack": o.stack.name if o.stack else None, "weight": o.weight.name if o.weight else None,
+                     **({"channels": {k: v.name for k, v in o.channels.items()}} if o.channels else {})}
                     for o in outputs],
         "qc": qc,
         "warnings": [str(w) for w in warnings],
