@@ -89,6 +89,10 @@ def build(gpu: bool) -> Path:
                     rel = dll.parent.relative_to(base.parent)
                     args += ["--add-binary", f"{dll}{os.pathsep}{rel.as_posix()}"]
             args += ["--copy-metadata", f"nvidia-{lib.replace('_', '-')}-cu12"]
+        # CuPy 用 NVRTC 編譯 kernel 要 CUDA 標頭檔，且必須與 NVRTC 同版。沒包的話會去找使用者自己裝的 CUDA Toolkit：
+        # 比 NVRTC 舊就編譯失敗（__nv_fp8_e8m0 incomplete type），沒裝的話找的過程會逾時失敗（2026-10-26，同 APU Astro 0.1.4）。
+        # gui_entry.py 會把 CUDA_PATH 指過來
+        args += ["--add-data", f"{base / 'cuda_runtime' / 'include'}{os.pathsep}nvidia/cuda_runtime/include"]
     else:
         for mod in GPU_MODULES:
             args += ["--exclude-module", mod]
@@ -135,18 +139,41 @@ def prune_cuda(bundle: Path) -> None:
     print(f"移除用不到的 CUDA 函式庫 {removed / 2**20:.0f} MB")
 
 
+def isolated_cuda_env(tmp: Path) -> dict:
+    """模擬沒有裝 CUDA Toolkit 的電腦：CUDA_PATH 指到空資料夾、PATH 拿掉 CUDA、kernel 快取用全新的資料夾
+    （不然會沿用以前編好的 kernel，根本不會重新編譯）。打包版必須只靠包進去的 DLL 與標頭檔就能在 GPU 上跑。"""
+    env = dict(os.environ)
+    for key in [k for k in env if k.upper().startswith("CUDA_PATH") or k.upper() == "CUDA_HOME"]:
+        env.pop(key)
+    (tmp / "no_cuda").mkdir()
+    (tmp / "cupy_cache").mkdir()
+    env["CUDA_PATH"] = str(tmp / "no_cuda")
+    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                  if "cuda" not in p.lower() and "nvidia gpu computing toolkit" not in p.lower())
+    env["CUPY_CACHE_DIR"] = str(tmp / "cupy_cache")
+    return env
+
+
 def smoke_test(exe: Path, gpu: bool) -> None:
     from tests.test_drizzle import _dithered
     from tests.test_pipeline import _make
 
     with tempfile.TemporaryDirectory() as tmp:
-        light, _inputs = _make(Path(tmp), bayer="RGGB", with_cal=False, shifts=_dithered(10))
-        out = Path(tmp) / "smoke.txt"
-        cmd = [str(exe), "--smoke-test", str(light), str(out)] + (["--expect-gpu"] if gpu else [])
-        proc = subprocess.run(cmd, timeout=900)
+        tmp = Path(tmp)
+        # 含 dark 與 flat：校正檔要建 master（GPU 那次在顯示卡上建，2026-10-26 的問題就出在這一步）
+        _light, inputs = _make(tmp / "data", bayer="RGGB", with_cal=True, shifts=_dithered(10))
+        out = tmp / "smoke.txt"
+        cmd = [str(exe), "--smoke-test", str(out)] + [str(p) for p in inputs] + (["--expect-gpu"] if gpu else [])
+        env = isolated_cuda_env(tmp)
+        proc = subprocess.run(cmd, timeout=900, env=env)
         text = out.read_text(encoding="utf-8") if out.exists() else "(沒有輸出)"
-        if proc.returncode != 0 or not text.startswith("ok ") or "frames=10" not in text:
+        if proc.returncode != 0 or not text.startswith("ok ") or "frames=10" not in text or "masters=0" in text:
             raise SystemExit(f"打包好的程式測試失敗（exit {proc.returncode}）：\n{text}")
+        if "gpu: frames" in text:
+            kernels = [p for p in Path(env["CUPY_CACHE_DIR"]).rglob("*") if p.is_file()]
+            if not kernels:
+                raise SystemExit("GPU 疊圖通過，但 kernel 快取是空的：沒有真的在沒有 CUDA Toolkit 的條件下重新編譯")
+            text = f"{text.strip()}; 沒有 CUDA Toolkit 時新編 kernel {len(kernels)} 個"
         print(f"打包好的程式測試通過：{text.strip()}")
 
 

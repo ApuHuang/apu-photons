@@ -99,8 +99,9 @@ light 與校正檔一起給（檔案或資料夾；資料夾等同其中的影�
 只有一個版本：執行時自動偵測，有 NVIDIA 顯示卡（與新版驅動）就用 GPU，沒有就用 CPU 多行程，使用者不用選、也不用另外安裝 CUDA。
 包進去的只有 CUDA runtime 與 NVRTC；cuBLAS、cuFFT 等用不到的函式庫（約 1.9 GB）會自動移除。
 
-打包完會自動用合成星場跑一次打包好的 exe（多行程、CFA Drizzle 2×、預覽；打包的電腦有 GPU 時再用 GPU 跑一次），
-失敗就不產生 zip。圖示由 `packaging\make_assets.py` 產生。
+打包完會自動用合成星場（含 dark、flat）跑一次打包好的 exe（建 master、多行程、CFA Drizzle 2×、預覽；打包的電腦有 GPU 時
+再用 GPU 跑一次），而且是在模擬「沒有裝 CUDA Toolkit」的條件下跑（藏起 `CUDA_PATH` 與 PATH 裡的 CUDA、kernel 快取用全新的資料夾），
+確認打包版只靠包進去的 CUDA DLL 與標頭檔就能在 GPU 上編譯 kernel。失敗就不產生 zip。圖示由 `packaging\make_assets.py` 產生。
 
 Mac 版（Apple Silicon 與 Intel）由 GitHub Actions 的雲端 Mac 打包（`.github/workflows/build-macos.yml`）：
 發布 Release 時自動執行並把 zip 附到同一個 Release，也可以在 Actions 頁面手動執行。Mac 沒有 CUDA，只用 CPU 多行程。

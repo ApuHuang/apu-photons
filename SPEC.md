@@ -705,3 +705,20 @@ APU Astro 整合版（Qt，直接呼叫 `apu_photons`）用 0.2.0.dev1 實測後
   - 局部正規化改用 3 階多項式（Stage 4）；
   - 雙窄帶濾鏡另存 Ha／OIII（Stage 8；原列 V1 的 Channel Separation 的一部分）。還沒有 LP 實拍資料驗證，只用合成資料測過數值。
   - 「載入 Recipe…」移到上方標題列（檔案分頁的工具列太擠，「加入」被擠掉、「載入 Recipe」被截成「載入 Rec」）。
+
+### 10.7 0.2.1：打包版 GPU 建 master 失敗（2026-10-26）
+- APU Astro 整合版（內含 Photons）的使用者開 GPU 疊圖，建 master dark 時失敗，畫面只顯示
+  `PermissionError: [WinError 32] … apu_photons_*.npy`。整合版 0.1.4 先修好，交接過來（Photons 0.2.0 有同樣的問題）。
+- 原因一：CuPy 14 用 NVRTC 編譯 kernel 時要 CUDA 標頭檔（用 `cuda.pathfinder` 找：site-packages → conda → `CUDA_PATH` → 探測系統），
+  打包版只包了 DLL（NVRTC 12.9）沒包標頭檔：
+  - 使用者裝了比 12.8 舊的 CUDA Toolkit → 用到舊標頭檔，編譯失敗（`__nv_fp8_e8m0` incomplete type，42 個錯誤）；
+  - 沒裝 CUDA Toolkit → 最後一步「探測系統」開子行程，打包版的子行程是 Photons 自己的 exe，10 秒後逾時失敗（2026-10-26 在這台重現）；
+  - 這台裝了 CUDA 12.9（與 NVRTC 同版），而且冒煙測試的合成資料沒有 dark，所以發布前沒抓到。
+- 原因二：失敗時 traceback 還抓著暫存 memmap，Windows 刪不掉暫存檔，`WinError 32` 蓋掉真正的錯誤。
+- 修正（與整合版相同）：打包時把 `nvidia/cuda_runtime/include`（約 4.5 MB，與 NVRTC 同版）包進去，啟動時 `CUDA_PATH` 指過去；
+  建 master 出錯時先 `traceback.clear_frames` 放掉 memmap 再刪暫存檔。
+- 冒煙測試加強：合成資料加 dark、flat（要建 master），而且在模擬沒有 CUDA Toolkit 的環境跑（`CUDA_PATH` 指到空資料夾、PATH 拿掉 CUDA、
+  `CUPY_CACHE_DIR` 用全新資料夾），GPU 那次必須新編出 kernel 才算通過。打包進入點另加 `--cli`，可以用打包好的程式跑命令列。
+- 驗證：0.2.0 的 exe 在這個環境重現失敗；0.2.1 的冒煙測試 CPU／GPU 各建 2 個 master、新編 108 個 kernel；
+  用 0.2.1 的 exe 在同樣環境開 GPU 疊 NGC1499（40 張 dark），master dark 建成、新編 81 個 kernel，全程 95 秒。
+
