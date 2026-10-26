@@ -1,10 +1,31 @@
 # APU Photons
 
-Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
+Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免費、開放原始碼（MIT）。
 
-工作流：**APU Pick**（挑片）→ **APU Photons**（疊圖）→ **APU Processing**（後製），同屬 APU Astro 系列。
+工作流：**[APU Pick](https://github.com/ApuHuang/apu-pick)**（挑片）→ **APU Photons**（疊圖）→
+**[APU Processing](https://github.com/ApuHuang/apu-processing)**（後製），同屬 APU Astro 系列。
 
-設計規格見 [SPEC.md](SPEC.md)。目前開發 0.2：多組資料（濾鏡、相機、光學系統）、校正檔自動配對、檔案輸入。
+目前版本 **0.2.1**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
+彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。設計規格見 [SPEC.md](SPEC.md)。
+
+## 下載與安裝
+
+到 [Releases](https://github.com/ApuHuang/apu-photons/releases/latest) 下載最新版，不用安裝 Python：
+
+| 系統 | 檔案 |
+|---|---|
+| Windows 10 / 11（64 位元） | `APUPhotons-<版本>-win64.zip` |
+| Mac（Apple M 系列） | `APUPhotons-<版本>-macos-arm64.zip` |
+| Mac（Intel） | `APUPhotons-<版本>-macos-x86_64.zip` |
+
+- **Windows**：解壓縮後雙擊 `APUPhotons.exe`。第一次開啟若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」
+  （程式沒有購買數位簽章）。
+- **Mac**：解壓縮後把 `APUPhotons.app` 拖到「應用程式」。第一次開啟被擋下時，到「系統設定」→「隱私權與安全性」按「強制打開」
+  （沒有 Apple 付費簽章）。
+- **GPU**：Windows 有 NVIDIA 顯示卡（與新版驅動）時自動用 GPU，不用另外安裝 CUDA；沒有就用 CPU 多核心。Mac 一律用 CPU。
+- 建議先用 [APU Pick](https://github.com/ApuHuang/apu-pick) 挑掉模糊、拖線、過雲的片，再交給 Photons 疊圖；Pick 淘汰的片 Photons 會自動跳過。
+
+以下是從原始碼執行與開發的說明。
 
 ## 視窗介面
 
@@ -12,7 +33,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 .venv\Scripts\apu-photons-gui
 ```
 
-與 APU Processing、APU Pick 同一套暗房介面：頂部列（加入檔案、試跑、疊圖／停止、繁中｜EN）、
+與 APU Processing、APU Pick 同一套暗房介面：頂部列（加入檔案、載入 Recipe、試跑、疊圖／停止、繁中｜EN）、
 右側可收合面板（結果、校正、疊圖、輸出、效能，說明在 ⓘ 裡）、底部狀態列（進度與剩餘時間）。
 
 - **檔案**：light 與 dark、flat、bias 一起加入（可以多選、分幾次加入），類型自動判斷；
@@ -21,13 +42,14 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。
 - **校正**：每個校正組自動配到的 dark / bias / flat / flat 扣除，可以逐組改；所有校正檔與沒用到的原因；
   某晚沒有 flat 時，可打開「沒有 flat 時用最近一晚的」
 - **結果**：每個整合組各一個 master，下拉選單切換；滾輪縮放 25%～400%、拖曳平移、適合視窗／100%，
-  換濾鏡或 Drizzle／一般疊圖時保持同一塊天空
+  換濾鏡或 Drizzle／一般疊圖時保持同一塊天空。下方會給建議：剔除特別多的片是天光變化（天亮、月光）、雲，
+  還是衛星與飛機，該怎麼處理；也會提示適合 Drizzle，或裁切掉太多時可以調低覆蓋門檻
 - **紀錄**
 
-參數、語言、面板收合狀態、濾鏡名稱對應會記住。Mac 的選單列「檔案」與 Windows 檔案分頁的按鈕可以載入 Recipe：
+參數、語言、面板收合狀態、濾鏡名稱對應會記住。「載入 Recipe…」（Windows 在上方標題列，Mac 在選單列「檔案」）：
 完全重現（同樣的檔案、分類、配對、參考 frame）或只套用設定。
 
-## 已完成
+## 功能
 
 | Stage | 內容 |
 |---|---|
@@ -118,6 +140,24 @@ Windows 版也可以由雲端 Windows 打包（`.github/workflows/build-windows.
 用合成星場驗證：已知位移／旋轉的對齊精度、中天翻轉、衛星軌跡剔除、熱像素與暗角修正、APU Pick sidecar 篩選、Preview 與 Downsample；
 0.2 另有檔案分類、多濾鏡分組與像素對齊、dark 配對忽略濾鏡、flat 依觀測夜、做好的 master、合併光學系統、載入 Recipe、放大檢視、
 壞 frame（權重算不出來、對齊到別處）不拖垮 master、master 校正檔多行程與 GPU 結果一致、局部正規化對齊各張的梯度。
+
+## English
+
+APU Photons (Astrophotography Photons Utility) calibrates, registers and stacks astrophotography frames. It is the
+stacking step of the APU Astro series: [APU Pick](https://github.com/ApuHuang/apu-pick) (frame selection) →
+APU Photons (stacking) → [APU Processing](https://github.com/ApuHuang/apu-processing) (post-processing).
+Free and open source (MIT); the interface is available in English and Traditional Chinese.
+
+- Add lights together with darks, flats and bias; types are detected and calibration frames are matched automatically
+- Every filter is stacked in one run, and the masters are pixel aligned with each other (ready for HOO / SHO / LRGB)
+- CFA Drizzle for colour cameras; dual-band filters (Seestar LP, L-eXtreme, …) also give Ha and OIII mono masters
+- Advice after stacking (dawn or moonlight, cloud, satellites; Drizzle and crop hints); optional local normalization
+- NVIDIA GPU acceleration on Windows without installing CUDA; multi-core CPU otherwise
+
+**Download** the latest version from [Releases](https://github.com/ApuHuang/apu-photons/releases/latest)
+(Windows 10 / 11 64-bit, Mac Apple silicon and Intel) — no Python needed. On Windows, unzip and run `APUPhotons.exe`
+(if "Windows protected your PC" appears, choose "More info" → "Run anyway"). On Mac, drag `APUPhotons.app` to
+Applications; if the first launch is blocked, open System Settings → Privacy & Security and choose "Open Anyway".
 
 ## 授權
 
