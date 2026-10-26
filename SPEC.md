@@ -713,7 +713,9 @@ APU Astro 整合版（Qt，直接呼叫 `apu_photons`）用 0.2.0.dev1 實測後
   打包版只包了 DLL（NVRTC 12.9）沒包標頭檔：
   - 使用者裝了比 12.8 舊的 CUDA Toolkit → 用到舊標頭檔，編譯失敗（`__nv_fp8_e8m0` incomplete type，42 個錯誤）；
   - 沒裝 CUDA Toolkit → 最後一步「探測系統」開子行程，打包版的子行程是 Photons 自己的 exe，10 秒後逾時失敗（2026-10-26 在這台重現）；
-  - 這台裝了 CUDA 12.9（與 NVRTC 同版），而且冒煙測試的合成資料沒有 dark，所以發布前沒抓到。
+  - 不只建 master：只有 light 時，GPU 整合第一次編譯 kernel 也一樣失敗（用 0.2.0 的 exe 只給 light 重現，錯在 `integrate.warp_band`）。
+    也就是 0.2.0 在 Windows 上，只要開 GPU、電腦沒裝 12.8 以上的 CUDA Toolkit，疊圖都會失敗；暫時的解法是關掉「使用 GPU」；
+  - 這台裝了 CUDA 12.9（與 NVRTC 同版），所以發布前的冒煙測試沒抓到。
 - 原因二：失敗時 traceback 還抓著暫存 memmap，Windows 刪不掉暫存檔，`WinError 32` 蓋掉真正的錯誤。
 - 修正（與整合版相同）：打包時把 `nvidia/cuda_runtime/include`（約 4.5 MB，與 NVRTC 同版）包進去，啟動時 `CUDA_PATH` 指過去；
   建 master 出錯時先 `traceback.clear_frames` 放掉 memmap 再刪暫存檔。
