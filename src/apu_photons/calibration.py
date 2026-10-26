@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
@@ -62,6 +63,10 @@ def _combine_files(paths: list[Path], preprocess=None, be: Backend = CPU, worker
             list(io.map(load, range(len(paths))))
         tmp.flush()
         return _combine_memmap(tmp, path, be, workers, memory_mb, progress)
+    except BaseException as exc:
+        # traceback 還抓著下層 frame 裡的 memmap：先放掉，否則 Windows 刪不掉暫存檔（WinError 32），還會蓋掉真正的錯誤
+        traceback.clear_frames(exc.__traceback__)
+        raise
     finally:
         del tmp
         path.unlink(missing_ok=True)
