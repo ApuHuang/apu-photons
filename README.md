@@ -5,7 +5,7 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 工作流：**[APU Pick](https://github.com/ApuHuang/apu-pick)**（挑片）→ **APU Photons**（疊圖）→
 **[APU Processing](https://github.com/ApuHuang/apu-processing)**（後製），同屬 APU Astro 系列。
 
-目前版本 **0.2.1**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
+目前版本 **0.2.2**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
 彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。設計規格見 [SPEC.md](SPEC.md)。
 
 ## 下載與安裝

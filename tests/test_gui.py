@@ -107,6 +107,42 @@ def test_stack_flow_and_language(app, tmp_path):
     assert app.image_canvas.path == app.result.output
 
 
+def test_language_keeps_open_groups_and_selection(app, tmp_path):
+    light, inputs = _make(tmp_path)
+    app.add_files(inputs)
+    app.wait_plan()
+    groups = [i for i in app._all_items(app.tree) if not i.startswith("f:")]
+    closed, opened = groups[1], next(i for i in groups if i.startswith("s:"))  # 收合預設展開的、展開預設收合的
+    app.tree.item(closed, open=False)
+    app.tree.item(opened, open=True)
+    picked = [i for i in app._all_items(app.tree) if i.startswith("f:")][:2]
+    app.tree.selection_set(picked)
+    app.lang_var.set("en")
+    app._language_clicked()
+    assert not app.tree.item(closed, "open") and app.tree.item(opened, "open")
+    assert set(app.tree.selection()) == set(picked)
+
+
+def test_tk_dialog_buttons_follow_language(tk_root):
+    gui.set_tk_locale(tk_root)
+    assert tk_root.tk.eval('namespace eval ::tk {::msgcat::mc "&Yes"}') == "是(&Y)"
+    set_language("en")
+    try:
+        gui.set_tk_locale(tk_root)
+        assert tk_root.tk.eval('namespace eval ::tk {::msgcat::mc "&Yes"}') == "&Yes"
+    finally:
+        set_language("zh")
+        gui.set_tk_locale(tk_root)
+
+
+def test_mac_tree_wheel_follows_delta(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gui, "IS_MAC", True)
+    event = type("E", (), {"delta": 4})()
+    assert gui._wheel(lambda n, what: calls.append(n), event) == "break"
+    assert calls == [-4]
+
+
 def test_trial_and_cancel(app, tmp_path):
     light, _inputs = _make(tmp_path, with_cal=False)
     app.add_light_folder(light)

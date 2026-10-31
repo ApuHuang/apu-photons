@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .i18n import Msg
@@ -28,13 +28,21 @@ CAL_KINDS = ("dark", "bias", "flat", "flat_dark")
 # ---------- 觀測夜與像素尺度 ----------
 
 def night_of(date_obs: str | None, site_long: float | None) -> str:
-    """觀測夜：地方時中午切換日期（DATE-OBS 視為 UTC；有經度時換算成地方平時）。"""
+    """觀測夜：地方時中午切換日期（DATE-OBS 視為 UTC；有經度時換算成地方平時，
+    沒有時用電腦的時區，依拍攝當天的時差，夏令時間也對）。"""
     t = _time(date_obs)
     if t is None:
         return "unknown"
-    if site_long is not None:
-        t += timedelta(hours=site_long / 15.0)
+    t += timedelta(hours=site_long / 15.0) if site_long is not None else _local_offset(t)
     return (t - timedelta(hours=12)).date().isoformat()
+
+
+def _local_offset(t_utc: datetime) -> timedelta:
+    """電腦時區在 t_utc 當時與 UTC 的時差。"""
+    try:
+        return t_utc.replace(tzinfo=timezone.utc).astimezone().utcoffset() or timedelta(0)
+    except (OverflowError, OSError, ValueError):  # Windows 上 1970 年以前的時間
+        return timedelta(0)
 
 
 def pixel_scale(header: dict) -> float | None:

@@ -86,6 +86,18 @@ def test_bayer_offset_and_night():
     assert night_of("2026-09-20T20:00:00", 120.4) == "2026-09-20"  # 地方時凌晨 4 點
 
 
+def test_night_without_longitude_uses_computer_timezone(monkeypatch):
+    from datetime import timedelta
+    from apu_photons import ingest
+    monkeypatch.setattr(ingest, "_local_offset", lambda t: timedelta(hours=8))  # 台灣
+    # 地方時晚上 7 點的 flat 與 10 點的 light 屬於同一晚（以前 UTC 中午切，flat 會算到前一晚）
+    assert night_of("2026-09-20T11:00:00", None) == "2026-09-20"
+    assert night_of("2026-09-20T14:00:00", None) == "2026-09-20"
+    assert night_of("2026-09-20T03:00:00", None) == "2026-09-19"  # 地方時上午 11 點：還算前一晚
+    # 有經度時仍以經度為準
+    assert night_of("2026-09-20T11:00:00", 0.0) == "2026-09-19"
+
+
 @pytest.mark.parametrize("bayer", [None, "RGGB"])
 def test_full_stack(tmp_path, bayer):
     light, inputs = _make(tmp_path, bayer=bayer)

@@ -202,7 +202,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
         rows = min(rows, max(16, -(-ho // (max(1, workers) * 3))))
         strips = [(q, min(ho, q + rows)) for q in range(0, ho, rows)]
         log(Msg("msg.drizzle_cpu", workers=workers, rows=rows, strips=len(strips)))
-        if workers <= 1:
+        if workers <= 1 or len(strips) <= 1:  # 只有 1 條：開行程池比算還久
             _init_worker(jobs, spec, img_path, wgt_path)
             results, pool = map(_cpu_strip, strips), None
         else:

@@ -43,6 +43,7 @@ from .register import ALGO_VERSION as REG_VERSION, overlap_fraction, register_ma
 MIN_STARS = 10
 MIN_GROUP_FRAMES = 2
 MIN_OVERLAP = 0.3  # 與參考重疊不到這個比例：對齊結果是錯的（配到別處的星）
+SMALL_PIXELS = 40_000_000  # 張數 × 像素少於這個量：自動設定時校正與找星不開行程池
 RECIPE_SCHEMA = "apuphotons-recipe/2"
 # 每個對齊組可以各自設定的輸出項目（SPEC §3 Stage 7、8）
 ALIGN_OUTPUT_KEYS = ("drizzle", "pixfrac", "fill_holes", "downsample", "crop_common", "crop_min_coverage")
@@ -245,7 +246,9 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
         sig = _calib_signature(entry, project)
         tasks = [(str(f.path), str(cdir / f"{_calib_key(f, sig)}.npy")) for f in frames]
         base = done
-        results = prepare(tasks, masters, frames[0].bayer, workers, log,
+        # 自動設定、資料又很小時不開行程池：開行程池本身就要 1～2 秒，比校正與找星還久
+        small = s.workers == 0 and sum((f.shape[0] * f.shape[1]) if f.shape else 0 for f in frames) < SMALL_PIXELS
+        results = prepare(tasks, masters, frames[0].bayer, 1 if small else workers, log,
                           lambda d, t, base=base: report("prepare", base + d, total), grid=s.normalization == "local")
         done += len(frames)
         for f, (_src, dst), (stars, loc, bg, err) in zip(frames, tasks, results):

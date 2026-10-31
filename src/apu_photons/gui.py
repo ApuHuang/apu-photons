@@ -111,6 +111,7 @@ class PhotonsView(tk.Frame):
         self._loading_output = False
         self._reference = None                      # 載入 recipe「完全重現」時的參考 frame
         self._seen_nodes: set[str] = set()          # 檔案清單裡出現過的分組（展開狀態從第二次起照使用者的）
+        self._kept_tree: tuple[set[str], tuple[str, ...]] | None = None  # 換語言重建時存下的展開分組與選取
         self._status_fn: Callable[[], str] = lambda: tr("gui.status.start")
 
         st = load_settings()
@@ -411,6 +412,9 @@ class PhotonsView(tk.Frame):
         xs.grid(row=1, column=0, sticky="ew")
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
+        if IS_MAC:  # Tk 內建的捲動在 Mac 上一次只動一點點：照 delta 大小捲，同右側面板
+            tree.bind("<MouseWheel>", lambda e: _wheel(tree.yview_scroll, e))
+            tree.bind("<Shift-MouseWheel>", lambda e: _wheel(tree.xview_scroll, e))
 
     def _toolbar(self, parent) -> tk.Frame:
         bar = tk.Frame(parent, bg=Darkroom.chrome)
@@ -586,13 +590,7 @@ class PhotonsView(tk.Frame):
         first, last = self.panel_canvas.yview()
         if first <= 0 and last >= 1:
             return
-        # macOS 的 delta 是 ±1 起跳、隨觸控板速度變大的數字，要照大小捲（同 Pick）；Windows 一格是 120
-        if IS_MAC:
-            steps = -event.delta
-        else:
-            steps = -3 * (int(event.delta / 120) if abs(event.delta) >= 120 else (1 if event.delta > 0 else -1))
-        if steps:
-            self.panel_canvas.yview_scroll(steps, "units")
+        _wheel(self.panel_canvas.yview_scroll, event)
 
     # ------------------------------------------------------------------ 說明氣泡
 
@@ -639,6 +637,7 @@ class PhotonsView(tk.Frame):
         else:
             set_language(lang)
             save_settings(language=lang)
+            set_tk_locale(self.root)
             self.rebuild()
 
     def rebuild(self) -> None:
@@ -648,6 +647,10 @@ class PhotonsView(tk.Frame):
         self.close_popover()
         if hasattr(self, "image_canvas"):
             self.image_canvas.close()
+        if hasattr(self, "tree") and self.tree.winfo_exists():  # 分組的展開狀態與選取跟著留下來
+            items = self._all_items(self.tree)
+            self._seen_nodes.update(i for i in items if not i.startswith("f:"))
+            self._kept_tree = ({i for i in items if self.tree.item(i, "open")}, self.tree.selection())
         for child in self.winfo_children():
             child.destroy()
         self._build()
@@ -1433,10 +1436,21 @@ class PhotonsView(tk.Frame):
     def _fill_files(self) -> None:
         if not hasattr(self, "tree") or not self.tree.winfo_exists():
             return
-        items = self._all_items(self.tree)
-        open_nodes = {i for i in items if self.tree.item(i, "open")}
-        self._seen_nodes.update(i for i in items if not i.startswith("f:"))
+        if self._kept_tree is not None:  # 剛換語言重建：清單是新的，用重建前存下來的狀態
+            open_nodes, selected = self._kept_tree
+            self._kept_tree = None
+        else:
+            items = self._all_items(self.tree)
+            open_nodes = {i for i in items if self.tree.item(i, "open")}
+            self._seen_nodes.update(i for i in items if not i.startswith("f:"))
+            selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
+        self._fill_file_items(open_nodes)
+        keep = [i for i in selected if self.tree.exists(i)]
+        if keep:
+            self.tree.selection_set(keep)
+
+    def _fill_file_items(self, open_nodes: set[str]) -> None:
 
         def is_open(iid: str, default: bool) -> bool:
             """第一次出現的分組照預設；之後保持使用者展開或收合的狀態。"""
@@ -1635,6 +1649,36 @@ class PhotonsView(tk.Frame):
             self.image_canvas.close()
 
 
+# Tk 內建只有簡體翻譯，而且「是」翻成「确定」：繁中自己補對話框按鈕
+_TK_ZH_TW = {"&Yes": "是(&Y)", "&No": "否(&N)", "&Cancel": "取消(&C)", "&OK": "確定(&O)", "OK": "確定",
+             "Cancel": "取消", "&Abort": "中止(&A)", "&Retry": "重試(&R)", "&Ignore": "忽略(&I)"}
+
+
+def set_tk_locale(root: tk.Misc) -> None:
+    """Tk 自己的文字（對話框按鈕等）跟著介面語言。"""
+    try:
+        if get_language() == "zh":
+            for key, text in _TK_ZH_TW.items():
+                root.tk.call("namespace", "eval", "::tk", ["::msgcat::mcset", "zh_tw", key, text])
+            root.tk.call("::msgcat::mclocale", "zh_tw")
+        else:
+            root.tk.call("::msgcat::mclocale", "en")
+    except tk.TclError:
+        pass
+
+
+def _wheel(scroll: Callable[[int, str], object], event: tk.Event) -> str:
+    """滾輪／觸控板捲動。macOS 的 delta 是 ±1 起跳、隨觸控板速度變大的數字，要照大小捲（同 Pick）；
+    Windows 一格是 120。回傳 "break"，不再交給 Tk 內建的捲動。"""
+    if IS_MAC:
+        steps = -event.delta
+    else:
+        steps = -3 * (int(event.delta / 120) if abs(event.delta) >= 120 else (1 if event.delta > 0 else -1))
+    if steps:
+        scroll(steps, "units")
+    return "break"
+
+
 def _extra_style(root: tk.Misc, px: Callable[[float], int], fonts: Fonts) -> None:
     """Photons 另外用到的 ttk 樣式（下拉選單、輸入框、選單按鈕）；共用的在 darkroom.setup_style。"""
     D = Darkroom
@@ -1642,8 +1686,11 @@ def _extra_style(root: tk.Misc, px: Callable[[float], int], fonts: Fonts) -> Non
     style.configure("Dark.TCombobox", fieldbackground=D.control, background=D.control, foreground=D.label,
                     arrowcolor=D.label, bordercolor=D.separator, lightcolor=D.control, darkcolor=D.control,
                     selectbackground=D.control, selectforeground=D.label, padding=(px(6), px(2)))
+    # 箭頭按鈕在按下／滑過時也要指定，不然 clam 用預設的淺色（Mac 展開時是白方塊）
     style.map("Dark.TCombobox", fieldbackground=[("readonly", D.control), ("disabled", D.panel)],
-              foreground=[("disabled", "#6b6b6b")], selectbackground=[("readonly", D.control)])
+              foreground=[("disabled", "#6b6b6b")], selectbackground=[("readonly", D.control)],
+              background=[("disabled", D.panel), ("pressed", D.hover), ("active", D.hover)],
+              arrowcolor=[("disabled", "#6b6b6b"), ("pressed", D.label), ("active", D.label)])
     style.configure("Dark.TEntry", fieldbackground=D.control, foreground=D.label, bordercolor=D.separator,
                     lightcolor=D.control, darkcolor=D.control, insertcolor=D.label, padding=(px(6), px(3)))
     style.configure("Dark.TMenubutton", background=D.control, foreground=D.label, arrowcolor=D.label,
@@ -1705,6 +1752,7 @@ def main(argv: list[str] | None = None) -> int:
     root.minsize(int(round(1080 * scale)), int(round(720 * scale)))
     root.configure(bg=Darkroom.canvas)
     root.title(f"{APP_NAME} {__version__}")
+    set_tk_locale(root)
 
     def menus() -> None:
         if IS_MAC:
@@ -1713,6 +1761,7 @@ def main(argv: list[str] | None = None) -> int:
     def change_language(lang: str) -> None:
         set_language(lang)
         save_settings(language=lang)
+        set_tk_locale(root)
         view.rebuild()
         menus()  # 選單文字跟著換
 

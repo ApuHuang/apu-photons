@@ -198,7 +198,7 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
     band = int(max(8, min(h, memory_mb * 2 ** 20 // max(1, workers) // bytes_per_row)))
     bands = [(r0, min(h, r0 + band)) for r0 in range(0, h, band)]
     log(Msg("msg.integrate_cpu", workers=workers, band=band, bands=len(bands)))
-    if workers <= 1:
+    if workers <= 1 or len(bands) <= 1:  # 只有 1 段：開行程池比算還久
         _init_worker(jobs, weights, spec)
         results = map(_cpu_band, bands)
         pool = None

@@ -89,7 +89,7 @@ def _combine_memmap(tmp: np.ndarray, path: Path, be: Backend, workers: int, memo
         return out
     band = int(max(8, min(MASTER_ROWS, memory_mb * 2 ** 20 // max(1, workers) // bytes_per_row)))
     bands = [(r0, min(h, r0 + band)) for r0 in range(0, h, band)]
-    if workers <= 1:
+    if workers <= 1 or len(bands) <= 1:  # 只有 1 段：開行程池比算還久
         _init_combine(str(path), tmp)
         results = map(_combine_band, bands)
         pool = None
