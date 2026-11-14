@@ -67,10 +67,10 @@ def test_frame_registered_elsewhere_is_rejected(tmp_path, monkeypatch):
 
     def fake(tasks, workers, progress=None):
         out = real(tasks, workers, progress)
-        (m, rms, si, ri), err = out[1]
+        (m, rms, si, ri, dist), err = out[1]
         m = m.copy()
         m[0, 2] += 10000.0
-        out[1] = ((m, rms, si, ri), err)
+        out[1] = ((m, rms, si, ri, dist), err)
         return out
 
     monkeypatch.setattr(engine, "register_many", fake)
@@ -94,8 +94,8 @@ def test_register_many_parallel_matches_sequential():
         th = np.radians(rng.uniform(-2, 2))
         rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
         src = (ref - 500) @ rot.T + 500 + rng.uniform(-20, 20, 2) + rng.normal(0, 0.05, ref.shape)
-        tasks.append((src, ref, 1.0))
-    tasks.append((ref[:3], ref, 1.0))  # 星太少：失敗
+        tasks.append((src, ref, 1.0, None))
+    tasks.append((ref[:3], ref, 1.0, None))  # 星太少：失敗
     one = register_many(tasks, 1)
     many = register_many(tasks, 2, progress=lambda d, t: None)
     assert len(one) == len(many) == len(tasks)

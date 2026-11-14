@@ -132,6 +132,8 @@ class PhotonsView(tk.Frame):
         self.high_var = tk.DoubleVar(value=p.get("high", 3.0))
         self.weights_var = tk.BooleanVar(value=p.get("weights", True))
         self.local_norm_var = tk.BooleanVar(value=p.get("local_norm", False))
+        self.distortion_var = tk.BooleanVar(value=p.get("distortion", False))
+        self.clamp_var = tk.BooleanVar(value=p.get("clamp", True))
         self.split_nights_var = tk.BooleanVar(value=p.get("split_nights", True))
         self.flat_any_night_var = tk.BooleanVar(value=p.get("flat_any_night", False))
         self.temp_tol_var = tk.DoubleVar(value=p.get("temp_tolerance", 2.0))
@@ -174,6 +176,7 @@ class PhotonsView(tk.Frame):
         self._build()
 
         for var in (self.rejection_var, self.low_var, self.high_var, self.weights_var, self.local_norm_var,
+                    self.distortion_var, self.clamp_var,
                     self.bits_var, self.dual_band_var, self.gpu_var, self.workers_var, self.memory_var,
                     self.preview_n_var):
             var.trace_add("write", lambda *_: self._params_changed())
@@ -354,6 +357,9 @@ class PhotonsView(tk.Frame):
         ParameterToggle(group.body, self, tr("gui.toggle.weights"), self.weights_var).pack(fill="x", pady=self.px(2))
         ParameterToggle(group.body, self, tr("gui.toggle.local_norm"), self.local_norm_var).pack(
             fill="x", pady=self.px(2))
+        ParameterToggle(group.body, self, tr("gui.toggle.distortion"), self.distortion_var).pack(
+            fill="x", pady=self.px(2))
+        ParameterToggle(group.body, self, tr("gui.toggle.clamp"), self.clamp_var).pack(fill="x", pady=self.px(2))
 
         group = PanelGroup(panel, self, "output", tr("gui.group.output"), tr("gui.group.output.info"))
         self.align_row = tk.Frame(group.body, bg=D.panel)
@@ -1120,6 +1126,7 @@ class PhotonsView(tk.Frame):
             high=round(float(self.high_var.get()), 2),
             weighting="snr2_over_fwhm2" if self.weights_var.get() else "none",
             normalization="local" if self.local_norm_var.get() else "global",
+            distortion=bool(self.distortion_var.get()), clamp=bool(self.clamp_var.get()),
             dual_band=bool(self.dual_band_var.get()),
             downsample=g["downsample"],
             crop_common=g["crop_common"], crop_min_coverage=g["crop_min_coverage"],
@@ -1144,6 +1151,7 @@ class PhotonsView(tk.Frame):
             "rejection": self.rejection_var.get(), "low": float(self.low_var.get()),
             "high": float(self.high_var.get()), "weights": bool(self.weights_var.get()),
             "local_norm": bool(self.local_norm_var.get()),
+            "distortion": bool(self.distortion_var.get()), "clamp": bool(self.clamp_var.get()),
             "split_nights": bool(self.split_nights_var.get()),
             "flat_any_night": bool(self.flat_any_night_var.get()),
             "temp_tolerance": float(self.temp_tol_var.get()),
@@ -1238,6 +1246,8 @@ class PhotonsView(tk.Frame):
         self.high_var.set(s.high)
         self.weights_var.set(s.weighting != "none")
         self.local_norm_var.set(s.normalization == "local")
+        self.distortion_var.set(bool(s.distortion))
+        self.clamp_var.set(bool(s.clamp))
         self.split_nights_var.set(s.split_nights)
         self.flat_any_night_var.set(s.flat_any_night)
         self.temp_tol_var.set(s.temp_tolerance)

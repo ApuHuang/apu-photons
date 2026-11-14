@@ -58,6 +58,8 @@ class Settings:
     weighting: str = "snr2_over_fwhm2"  # snr2_over_fwhm2 / none
     normalization: str = "global"      # global（每通道一個 offset）/ local（offset 是平滑的面，對齊各張的梯度）
     dual_band: bool = True             # 彩色相機＋雙窄帶濾鏡（認得出的名稱）時，另存 Ha 與 OIII 兩個單色 master
+    clamp: bool = True                 # 內插限幅：去掉亮星旁的暗環（0.3 起預設開；0.2 以前沒有）
+    distortion: bool = False           # 對齊時加畸變修正（廣角鏡頭、位移很大、合併不同器材時用）
     reference: str | list | None = None  # 參考 frame 的完整路徑或檔名（可以多個，各自套用到所在的對齊組）；None = 自動
     downsample: float = 1.0            # 1.0 或 0.5
     crop_common: bool = True
@@ -411,7 +413,9 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
     flux_ratio: dict[int, float] = {id(ref): 1.0}
     ref.transform, ref.registration_residual_px = np.eye(3), 0.0
     others = [f for f in frames if f is not ref]
-    tasks = [(np.column_stack([f.stars.x, f.stars.y]), ref_xy, _expected_scale(f, ref, project)) for f in others]
+    tasks = [(np.column_stack([f.stars.x, f.stars.y]), ref_xy, _expected_scale(f, ref, project),
+              (f.shape, ref.shape) if s.distortion else None) for f in others]
+    ref.distortion = None
     report("register", 0, len(others))
     results = register_many(tasks, workers, lambda d, t: report("register", d, t))
     for f, (res, err) in zip(others, results):
@@ -419,7 +423,7 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
             f.reject("registration_failed")
             warnings.append(Msg("msg.reg_failed", name=f.name, error=err))
             continue
-        m, rms, si, ri = res
+        m, rms, si, ri, f.distortion = res
         overlap = overlap_fraction(m, f.shape, ref.shape)
         if overlap < MIN_OVERLAP:
             f.reject("registration_failed")
@@ -431,6 +435,9 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
         r = r[np.isfinite(r) & (r > 0)]
         flux_ratio[id(f)] = float(np.median(r)) if len(r) else 1.0
     log(Msg("msg.registered", n=sum(f.accepted for f in frames)))
+    if s.distortion:
+        fixed = [f.distortion["max"] for f in frames if f.accepted and f.distortion]
+        log(Msg("msg.distortion", group=ag.id, n=len(fixed), total=len(others), max=max(fixed, default=0.0)))
 
     out = []
     for gi, g in enumerate(ag.groups):
@@ -566,7 +573,9 @@ def _scale_of(t: np.ndarray | None) -> float:
 
 def _jobs(frames: list[Frame]) -> list[FrameJob]:
     return [FrameJob(str(f.calibrated_path), f.transform, list(f.norm["scale"]), list(f.norm["offset"]), float(f.weight),
-                     f.bayer, f.norm.get("local")) for f in frames]
+                     f.bayer, f.norm.get("local"), f.distortion,
+                     # 找星用的亮度圖在彩色相機是 2×2 平均，雜訊約是單一像素的一半
+                     float(f.stars.noise) * (2.0 if f.bayer else 1.0)) for f in frames]
 
 
 def _integrate(frames, bayer, shape, s: Settings, gdir: Path, be, workers: int, log, progress=None):
@@ -584,7 +593,7 @@ def _integrate(frames, bayer, shape, s: Settings, gdir: Path, be, workers: int, 
         map_paths = [str(rdir / f"{i:04d}_{f.path.stem}.npy") for i, f in enumerate(frames)]
         need += n * h * w
     require_space(gdir, need, "msg.space.integrate")
-    spec = BandSpec(bayer, shape, s.rejection, s.low, s.high, str(master_path), map_paths)
+    spec = BandSpec(bayer, shape, s.rejection, s.low, s.high, str(master_path), map_paths, s.clamp)
     coverage, counts = integrate_mod.integrate(be, _jobs(frames), spec, workers, s.memory_mb, log, progress)
     return spec.master_path, coverage, counts, map_paths or [None] * n
 
@@ -942,7 +951,9 @@ def _write_recipe(output_dir: Path, project: Project, outputs: list[GroupResult]
         "inputs": [f.summary() for f in project.files],
         "stages": {
             "calibration": {"version": CALIB_VERSION},
-            "registration": {"algorithm": "triangle-ransac", "version": REG_VERSION, "model": "similarity"},
+            "registration": {"algorithm": "triangle-ransac", "version": REG_VERSION,
+                             "model": "similarity+polynomial" if s.distortion else "similarity"},
+            "resample": {"interpolation": "cubic-spline", "clamp": s.clamp},
             "normalize": {"algorithm": "star-flux-scale+background-offset", "version": "1",
                           "method": s.normalization,
                           **({"local": {"tile": localnorm.TILE, "degree": localnorm.DEGREE}}

@@ -994,4 +994,22 @@ _EN.update({
     'gui.update.page': 'download page',
 })
 
+# 0.3：內插限幅、畸變修正
+_ZH.update({
+    'gui.toggle.distortion': '畸變修正',
+    'gui.toggle.clamp': '抑制亮星暗環',
+    'cli.distortion': '對齊時加畸變修正（廣角鏡頭、各張位移很大、合併不同器材時用；預設只用相似變換）',
+    'cli.no_clamp': '不做內插限幅（預設會去掉亮星旁的暗環；0.2 以前沒有這一步）',
+    'msg.distortion': '{group}：畸變修正 {n}／{total} 張（最大修正 {max:.1f} px）',
+})
+_EN.update({
+    'gui.toggle.distortion': 'Distortion Correction',
+    'gui.toggle.clamp': 'Suppress Dark Rings',
+    'cli.distortion': 'correct lens distortion when registering (for wide lenses, large offsets between frames, or '
+                      'merged optical trains; a similarity transform alone by default)',
+    'cli.no_clamp': 'do not clamp the interpolation (by default dark rings around bright stars are removed; '
+                    'versions before 0.3 did not do this)',
+    'msg.distortion': '{group}: distortion corrected on {n} of {total} frames (largest correction {max:.1f} px)',
+})
+
 _CATALOG = {"zh": _ZH, "en": _EN}

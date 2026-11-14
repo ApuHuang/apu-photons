@@ -23,6 +23,7 @@ from .cache import require_space
 from .combine import HIGH, LOW
 from .i18n import Msg
 from .integrate import FrameJob
+from .localnorm import eval_offset
 
 ALGO_VERSION = "drizzle-1"
 
@@ -52,7 +53,8 @@ def _chan_lut(bayer: str | None) -> np.ndarray:
     return lut
 
 
-def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float, in_shape: tuple[int, int]):
+def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float, in_shape: tuple[int, int],
+                  margin: int = 0):
     """輸出第 q0~q1 列會用到的輸入區域（輸入座標，含 drop 半徑與邊界餘量）。"""
     s = spec.scale
     w = spec.shape[1]
@@ -62,10 +64,10 @@ def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float,
     ry1 = (q1 - 0.5 + hw) / s - 0.5 + 0.5 / s
     inv = np.linalg.inv(t)
     corners = np.array([[-1, ry0, 1], [w, ry0, 1], [-1, ry1, 1], [w, ry1, 1]], float) @ inv.T
-    y0 = max(0, int(np.floor(corners[:, 1].min())) - 2)
-    y1 = min(h_in, int(np.ceil(corners[:, 1].max())) + 3)
-    x0 = max(0, int(np.floor(corners[:, 0].min())) - 2)
-    x1 = min(w_in, int(np.ceil(corners[:, 0].max())) + 3)
+    y0 = max(0, int(np.floor(corners[:, 1].min())) - 2 - margin)
+    y1 = min(h_in, int(np.ceil(corners[:, 1].max())) + 3 + margin)
+    x0 = max(0, int(np.floor(corners[:, 0].min())) - 2 - margin)
+    x1 = min(w_in, int(np.ceil(corners[:, 0].max())) + 3 + margin)
     return y0 - y0 % 2, y1, x0 - x0 % 2, x1
 
 
@@ -91,7 +93,7 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
         # drop 最遠伸到最近那格的中心外 hw + 0.5，第 r 格涵蓋到 r + 0.5：往外看 ceil(hw) 格就夠
         # （以前是 ceil(hw + 0.5)：pixfrac 0.9、2× 時看 5×5 格，其實只有 3×3 格碰得到）
         reach = max(1, int(np.ceil(hw - 1e-9)))
-        y0, y1, x0, x1 = _input_bounds(t, q0, q1, spec, hw, cal.shape)
+        y0, y1, x0, x1 = _input_bounds(t, q0, q1, spec, hw, cal.shape, job.margin)
         if y1 - y0 < 1 or x1 - x0 < 1:
             continue
         v = xp.asarray(np.array(cal[y0:y1, x0:x1], np.float32))
@@ -100,6 +102,10 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
         ch = lut[(xp.arange(y0, y1) % 2)[:, None], (xp.arange(x0, x1) % 2)[None, :]]
         xr = t[0, 0] * xx + t[0, 1] * yy + t[0, 2]
         yr = t[1, 0] * xx + t[1, 1] * yy + t[1, 2]
+        if job.distortion:  # 畸變修正：每個輸入像素落到參考座標的位置再加多項式修正
+            d = job.distortion
+            xr = xr + eval_offset(xp, d["fwd"][0], xx, yy, d["src_shape"]).astype(xp.float32)
+            yr = yr + eval_offset(xp, d["fwd"][1], xx, yy, d["src_shape"]).astype(xp.float32)
         if job.local:
             off = xp.zeros(v.shape, xp.float32)
             for c in range(nch):

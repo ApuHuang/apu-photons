@@ -123,7 +123,8 @@ def test_full_stack(tmp_path, bayer):
     # 那張有軌跡的 frame 剔除像素比例應該最高
     trail = res.project.frames[3]
     others = [f.rejected_pixel_fraction for f in res.project.frames if f is not trail]
-    assert trail.rejected_pixel_fraction > 2 * max(others)
+    # 0.3 起內插限幅：軌跡兩側的負向過衝不再被當成低端離群值剔除，軌跡那張的剔除比例略降（彩色 4.8% → 4.65%）
+    assert trail.rejected_pixel_fraction > 1.8 * max(others)
     # 熱像素與暗角已修正：背景平坦（邊角與中央差不到幾個雜訊）
     corner = np.median(lum[20:50, 20:60])
     center = np.median(lum[110:150, 140:180])

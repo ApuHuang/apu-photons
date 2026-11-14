@@ -47,6 +47,8 @@ def load_recipe(path: Path, reproduce: bool = False, base: Settings | None = Non
     if schema != RECIPE_SCHEMA:
         values = {k: v for k, v in values.items() if k not in ("reference",)}
     s = Settings(**{**{f.name: getattr(base, f.name) for f in fields(Settings)}, **values})
+    if reproduce and "clamp" not in (doc.get("settings") or {}):
+        s.clamp = False  # 0.2 的 recipe：那時沒有內插限幅，完全重現就不開
     if doc.get("filter_aliases"):
         s.filter_aliases = dict(doc["filter_aliases"])
     out = LoadedRecipe(settings=s, reproducible=schema == RECIPE_SCHEMA)

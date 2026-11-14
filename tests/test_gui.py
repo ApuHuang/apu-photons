@@ -318,10 +318,14 @@ def test_load_recipe(app, tmp_path):
     app.load_recipe_file(res.recipe, reproduce=False)
     assert app.low_var.get() == 3.5 and not app.files and not app.crop_var.get()
     assert app.local_norm_var.get() and app.settings().normalization == "local"
+    assert app.settings().clamp and not app.settings().distortion      # 0.3 的預設
+    app.distortion_var.set(True)
+    app.clamp_var.set(False)
+    assert app.settings().distortion and not app.settings().clamp
     app.load_recipe_file(res.recipe, reproduce=True)
     assert len(app.files) == 8 and app.target_var.get() == "R"
     app.wait_plan()
-    assert app._reference == [res.project.align_groups[0].reference.name]
+    assert app._reference == [str(res.project.align_groups[0].reference.path)]
 
 
 def test_assign_calibration_and_flat_sub(app, tmp_path):

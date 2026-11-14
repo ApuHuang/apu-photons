@@ -12,6 +12,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .i18n import Msg
+from .localnorm import _basis, eval_offset
 
 ALGO_VERSION = "tri-ransac-1"
 TRI_STARS = 25
@@ -21,6 +22,12 @@ MIN_INLIERS = 8
 MAX_RESIDUAL = 1.0
 RANSAC_ITERS = 400
 SCALE_TOL = 0.1  # 縮放倍率與預期差超過 10% 就是錯配（同一套器材應該是 1）
+# 畸變修正（選用）：相似變換之外再加一個低階多項式
+DISTORT_MIN_STARS = 20   # 配對的星少於這個數不擬合（2 階要 6 項）
+DISTORT_CUBIC_STARS = 40  # 夠多才用 3 階（10 項；鏡頭的徑向畸變是 3 階）
+DISTORT_ITERS = 4
+DISTORT_MAX = 0.05       # 修正量超過影像對角線的這個比例：擬合出問題了，不用
+DISTORT_GRID = 24
 
 
 class RegistrationError(RuntimeError):
@@ -92,7 +99,8 @@ def overlap_fraction(m: np.ndarray, src_shape: tuple[int, int], ref_shape: tuple
 
 
 def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | None = None,
-             expected_scale: float | None = 1.0) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+             expected_scale: float | None = 1.0,
+             max_residual: float = MAX_RESIDUAL) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
     """src_xy、ref_xy 依亮度由亮到暗排序。回傳（3×3 變換, 殘差 RMS 像素, 配對的 src 索引, 對應的 ref 索引）。
 
     expected_scale：預期的縮放倍率（同一套器材是 1；合併不同器材時是像素尺度的比例；None＝不知道，只擋明顯不合理的）。"""
@@ -143,21 +151,97 @@ def register(src_xy: np.ndarray, ref_xy: np.ndarray, rng: np.random.Generator | 
     dist, j = ref_tree.query(apply(m, src_xy))
     ok = dist < MATCH_RADIUS
     rms = float(np.sqrt(np.mean(dist[ok] ** 2)))
-    if rms > MAX_RESIDUAL:
+    if rms > max_residual:
         raise RegistrationError(Msg("msg.reg.residual", rms=rms))
     return m, rms, np.flatnonzero(ok), j[ok]
 
 
+def _poly(coeffs, xy: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """多項式修正量 (P, 2)。coeffs：[x 的係數, y 的係數]，座標依 shape 換成 −0.5～0.5（與 localnorm 同一套）。"""
+    return np.column_stack([eval_offset(np, c, xy[:, 0], xy[:, 1], shape) for c in coeffs])
+
+
+def _fit_poly(xy: np.ndarray, resid: np.ndarray, shape: tuple[int, int], degree: int) -> list[list[float]]:
+    """resid (P, 2) 對 xy 的多項式擬合，剔除一次離群的配對（配錯的星）。"""
+    a = np.column_stack(_basis(xy[:, 0], xy[:, 1], shape, degree))
+    c, *_ = np.linalg.lstsq(a, resid, rcond=None)
+    d = np.hypot(*(resid - a @ c).T)
+    keep = d < max(3.0 * 1.4826 * float(np.median(d)), 0.3)
+    if keep.sum() >= 2 * a.shape[1] and not keep.all():
+        c, *_ = np.linalg.lstsq(a[keep], resid[keep], rcond=None)
+    return [[float(v) for v in c[:, 0]], [float(v) for v in c[:, 1]]]
+
+
+def fit_distortion(src_xy: np.ndarray, ref_xy: np.ndarray, m: np.ndarray, src_shape: tuple[int, int],
+                   ref_shape: tuple[int, int]):
+    """相似變換 m 之外的畸變修正：frame → 參考 = m·p + 多項式(p)。
+
+    廣角鏡頭的畸變在每張自己的座標上是固定的；兩張之間位移很大（沒導星的漂移、拼接、不同器材合併）時，
+    相似變換對得到中間、對不到角落。用配對到的星擬合 2～3 階多項式，每擬合一次就能多配到一些角落的星，重複幾次。
+
+    回傳（畸變 dict, 殘差 RMS, 配對的 src 索引, 對應的 ref 索引）；星太少、沒有比較好、修正量不合理時回傳 None。
+    畸變 dict：fwd（frame 座標 → 修正量，drizzle 用）、inv（參考座標 → frame 座標的修正量，整合的反向取樣用）、
+    max（最大修正量，像素）、src_shape、ref_shape。"""
+    tree = cKDTree(ref_xy)
+    base = apply(m, src_xy)
+    dist0, _j = tree.query(base)
+    ok0 = dist0 < MATCH_RADIUS
+    if ok0.sum() < DISTORT_MIN_STARS:
+        return None
+    rms0 = float(np.sqrt(np.mean(dist0[ok0] ** 2)))
+    fwd = None
+    for it in range(DISTORT_ITERS):
+        pred = base if fwd is None else base + _poly(fwd, src_xy, src_shape)
+        dist, j = tree.query(pred)
+        ok = dist < MATCH_RADIUS
+        if ok.sum() < DISTORT_MIN_STARS:
+            return None
+        degree = 3 if it > 0 and ok.sum() >= DISTORT_CUBIC_STARS else 2  # 第一次先用 2 階：星只在中間時 3 階外插不穩
+        fwd = _fit_poly(src_xy[ok], ref_xy[j[ok]] - base[ok], src_shape, degree)
+    dist, j = tree.query(base + _poly(fwd, src_xy, src_shape))
+    ok = dist < MATCH_RADIUS
+    rms = float(np.sqrt(np.mean(dist[ok] ** 2))) if ok.any() else float("inf")
+    if ok.sum() < ok0.sum() or rms >= rms0:
+        return None
+    # 反向（參考 → frame）：在 frame 上取一片格點，用正向模型送到參考座標，擬合回來的修正量
+    h, w = src_shape
+    gy, gx = np.meshgrid(np.linspace(0, h - 1, DISTORT_GRID), np.linspace(0, w - 1, DISTORT_GRID), indexing="ij")
+    grid = np.column_stack([gx.ravel(), gy.ravel()])
+    corr = _poly(fwd, grid, src_shape)
+    biggest = float(np.hypot(*corr.T).max())
+    if not np.isfinite(biggest) or biggest > DISTORT_MAX * float(np.hypot(h, w)):
+        return None
+    on_ref = apply(m, grid) + corr
+    inv = _fit_poly(on_ref, grid - apply(np.linalg.inv(m), on_ref), ref_shape, 3)
+    back = apply(np.linalg.inv(m), on_ref) + _poly(inv, on_ref, ref_shape)
+    if float(np.hypot(*(back - grid).T).max()) > 0.25:  # 反向對不回來：畸變太劇烈，3 階表示不了
+        return None
+    info = {"fwd": fwd, "inv": inv, "max": biggest, "src_shape": tuple(src_shape), "ref_shape": tuple(ref_shape)}
+    return info, rms, np.flatnonzero(ok), j[ok]
+
+
 def _register_task(task):
-    src_xy, ref_xy, expected = task
+    """task：(src_xy, ref_xy, 預期倍率, 畸變修正用的 (frame 尺寸, 參考尺寸) 或 None)。
+    回傳（(變換, 殘差, src 索引, ref 索引, 畸變 dict 或 None) 或 None, 失敗原因或 None）。"""
+    src_xy, ref_xy, expected, shapes = task
     try:
-        return register(src_xy, ref_xy, expected_scale=expected), None
+        if shapes is None:
+            return (*register(src_xy, ref_xy, expected_scale=expected), None), None
+        # 畸變大時相似變換的殘差本來就大：先放寬，修正後再用原本的門檻把關
+        m, rms, si, ri = register(src_xy, ref_xy, expected_scale=expected, max_residual=MATCH_RADIUS)
+        fitted = fit_distortion(src_xy, ref_xy, m, *shapes)
+        info = None
+        if fitted is not None:
+            info, rms, si, ri = fitted
+        if rms > MAX_RESIDUAL:
+            raise RegistrationError(Msg("msg.reg.residual", rms=rms))
+        return (m, rms, si, ri, info), None
     except RegistrationError as exc:
         return None, exc.args[0] if exc.args else str(exc)
 
 
 def register_many(tasks: list[tuple], workers: int, progress=None) -> list[tuple]:
-    """多張一起對齊：tasks 是 [(src_xy, ref_xy, expected_scale)]，回傳 [(register 的結果或 None, 失敗原因或 None)]。
+    """多張一起對齊：tasks 見 `_register_task`，回傳 [(結果或 None, 失敗原因或 None)]。
 
     每張都用相同的隨機數種子，多行程與逐張的結果完全相同。張數多、每張又小（例如 Seestar 幾百張）時，
     對齊是單執行緒的 Python 迴圈，占整次時間的四分之一；分給多個行程。progress(done, total)。"""

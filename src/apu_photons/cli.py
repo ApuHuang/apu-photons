@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--high", type=float, default=3.0, help=tr("cli.high"))
     st.add_argument("--no-weights", action="store_true", help=tr("cli.no_weights"))
     st.add_argument("--local-norm", action="store_true", help=tr("cli.local_norm"))
+    st.add_argument("--distortion", action="store_true", help=tr("cli.distortion"))
+    st.add_argument("--no-clamp", action="store_true", help=tr("cli.no_clamp"))
     st.add_argument("--no-dual-band", action="store_true", help=tr("cli.no_dual_band"))
     st.add_argument("--reference", help=tr("cli.reference"))
     st.add_argument("--downsample", action="store_true", help=tr("cli.downsample"))
@@ -107,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     inputs = [Path(p) for p in a.inputs] + [Path(p) for p in kinds]
     s = Settings(rejection=a.rejection, low=a.low, high=a.high, weighting="none" if a.no_weights else "snr2_over_fwhm2",
                  normalization="local" if a.local_norm else "global", dual_band=not a.no_dual_band,
+                 distortion=a.distortion, clamp=not a.no_clamp,
                  reference=a.reference, downsample=0.5 if a.downsample else 1.0,
                  crop_common=not a.no_crop, output_bits=a.bits, memory_mb=a.memory, split_nights=not a.one_session,
                  flat_any_night=a.flat_any_night,

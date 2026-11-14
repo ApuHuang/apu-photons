@@ -23,14 +23,18 @@ def star_catalog(n=120, seed=1):
 
 
 def render(tx=0.0, ty=0.0, rot_deg=0.0, fwhm=3.0, seed=0, catalog=None, vignette=None, hot=None,
-           trail=False, bayer=None, gain=1.0):
-    """回傳 frame 影像；(tx, ty, rot) 是「參考 → 這張」的變換（繞影像中心旋轉）。"""
+           trail=False, bayer=None, gain=1.0, distort=0.0):
+    """回傳 frame 影像；(tx, ty, rot) 是「參考 → 這張」的變換（繞影像中心旋轉）。
+    distort：鏡頭的徑向畸變（每張在自己的座標上都一樣）：離中心 r（以半寬為 1）的星往外移 distort × r² 倍。"""
     rng = np.random.default_rng(seed)
     x, y, flux = catalog or star_catalog()
     th = np.deg2rad(rot_deg)
     cx, cy = W / 2, H / 2
     xs = np.cos(th) * (x - cx) - np.sin(th) * (y - cy) + cx + tx
     ys = np.sin(th) * (x - cx) + np.cos(th) * (y - cy) + cy + ty
+    if distort:
+        k = 1.0 + distort * ((xs - cx) ** 2 + (ys - cy) ** 2) / cx ** 2
+        xs, ys = cx + (xs - cx) * k, cy + (ys - cy) * k
     yy, xx = np.mgrid[0:H, 0:W]
     img = np.full((H, W), BG, np.float64)
     sig = fwhm / 2.3548
