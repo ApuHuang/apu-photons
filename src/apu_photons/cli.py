@@ -9,6 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .cache import clear_cache, default_cache, format_size
 from .engine import Settings, run
 from .i18n import LANGUAGES, set_language, tr
 from .ingest import expand_inputs
@@ -90,7 +91,17 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--no-rejection-maps", action="store_true", help=tr("cli.no_rejection_maps"))
     st.add_argument("--preview", type=int, default=0, metavar="N", help=tr("cli.preview"))
     st.add_argument("--cache", help=tr("cli.cache"))
+    cc = sub.add_parser("clear-cache", help=tr("cli.clear_cache"))
+    cc.add_argument("-o", "--output", help=tr("cli.output"))
+    cc.add_argument("--cache", help=tr("cli.cache"))
     a = ap.parse_args(argv)
+
+    if a.cmd == "clear-cache":
+        if not (a.cache or a.output):
+            cc.error(tr("cli.clear_cache_need"))
+        caches = [Path(a.cache)] if a.cache else [default_cache(Path(a.output)), default_cache(Path(a.output) / "trial")]
+        print(tr("gui.cache.cleared", size=format_size(sum(clear_cache(c) for c in caches))))
+        return 0
 
     kinds = _forced_kinds(a)
     inputs = [Path(p) for p in a.inputs] + [Path(p) for p in kinds]

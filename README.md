@@ -109,7 +109,7 @@ light 與校正檔一起給（檔案或資料夾；資料夾等同其中的影�
 `--min-coverage 0.9`、`--no-crop`、`--filter-alias H-alpha=Ha`、`--merge "相機A @ 400mm,相機B @ 400mm"`、
 `--downsample`、`--rejection sigma`、`--local-norm`（局部正規化）、`--no-dual-band`（雙窄帶不另存 Ha／OIII）、`--reference 檔名`、`--memory 4096`、`--bits 16`。`apu-photons stack -h` 看全部。
 
-校正後的中介檔、master 與剔除遮罩放在輸出資料夾的 `.photons_cache/`，重跑會沿用；可以直接刪掉。
+校正後的中介檔、master 與剔除遮罩放在輸出資料夾的 `.photons_cache/`，重跑會沿用；可以直接刪掉，或用「輸出」裡的「清除快取」按鈕、`apu-photons clear-cache -o 輸出資料夾`。
 
 ## 打包
 

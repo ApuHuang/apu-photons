@@ -19,11 +19,13 @@ import threading
 import time
 import tkinter as tk
 import traceback
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import __version__, backend
+from . import __version__, backend, update
+from .cache import cache_size, clear_cache, default_cache, format_size
 from .darkroom import (Darkroom, Fonts, MetricRow, PanelGroup, ParameterSlider, ParameterToggle, Segmented, Tooltip,
                        _short_path, dark_title_bar, enable_dpi_awareness, setup_style)
 from .engine import ALIGN_OUTPUT_KEYS, Cancelled, Result, Settings, run
@@ -120,6 +122,10 @@ class PhotonsView(tk.Frame):
         self.panel_state: dict[str, bool] = dict(st.get("panel", {}))
         self.lang_var = tk.StringVar(value=get_language())
         self.output_dir_var = tk.StringVar(value="")
+        # 新版本：check_for_updates() 查到比目前新的版本時才有，頂部版號旁邊出現下載鍵
+        self.update_info: update.Update | None = None
+        self.update_check_var = tk.BooleanVar(value=update.enabled())
+        self.update_check_var.trace_add("write", lambda *_: self.set_update_check(bool(self.update_check_var.get())))
         self.target_var = tk.StringVar(value="")
         self.rejection_var = tk.StringVar(value=p.get("rejection", "winsorized"))
         self.low_var = tk.DoubleVar(value=p.get("low", 4.0))
@@ -230,8 +236,24 @@ class PhotonsView(tk.Frame):
         tk.Label(identity, text=APP_NAME, font=self.fonts.title, fg=D.label, bg=D.chrome).pack(side="left")
         badge = tk.Frame(identity, bg=D.beta, padx=1, pady=1)
         badge.pack(side="left", padx=(self.px(7), 0))
-        tk.Label(badge, text=f"v{__version__}", font=self.fonts.badge, fg=D.beta, bg=D.chrome,
-                 padx=self.px(4)).pack()
+        version = tk.Label(badge, text=f"v{__version__}", font=self.fonts.badge, fg=D.beta, bg=D.chrome,
+                           padx=self.px(4), cursor="hand2")
+        version.pack()
+        # 版號按一下：要不要檢查新版本、開下載頁面（Windows 沒有選單列，放這裡；Mac 另外在「輔助說明」選單）
+        for seq in ("<Button-1>", "<Button-2>", "<Button-3>"):
+            version.bind(seq, self._version_menu)
+        Tooltip(version, tr("gui.version.help"), self)
+        # 有新版才出現：跟版號同樣的小框（藍色），按一下用瀏覽器下載
+        self.update_badge = tk.Frame(identity, bg=D.accent, padx=1, pady=1, cursor="hand2")
+        self.update_label = tk.Label(self.update_badge, font=self.fonts.badge, fg=D.accent, bg=D.chrome,
+                                     padx=self.px(4), cursor="hand2")
+        self.update_label.pack()
+        for w in (self.update_badge, self.update_label):
+            w.bind("<Button-1>", lambda _e: self.open_update())
+        self.update_label.bind("<Enter>", lambda _e: self.update_label.configure(bg=D.hover))
+        self.update_label.bind("<Leave>", lambda _e: self.update_label.configure(bg=D.chrome))
+        self._update_tooltip = Tooltip(self.update_label, "", self)
+        self._show_update(self.update_info)
 
         actions = tk.Frame(bar, bg=D.chrome)
         actions.pack(side="right", padx=(0, self.px(14)))
@@ -389,6 +411,17 @@ class PhotonsView(tk.Frame):
         self.output_btn.pack(side="left")
         self.reveal_btn = ttk.Button(row, text=tr("gui.btn.reveal"), style="Dark.TButton", command=self._reveal_output)
         self.reveal_btn.pack(side="left", padx=(self.px(6), 0))
+        # 快取：校正後的 frame 與 master 校正檔，跨次執行共用；只增不減，所以顯示大小、給清除按鈕
+        row = tk.Frame(group.body, bg=D.panel)
+        row.pack(fill="x", pady=(self.px(8), 0))
+        self.cache_btn = ttk.Button(row, text=tr("gui.btn.clear_cache"), style="Dark.TButton",
+                                    command=self._clear_cache)
+        self.cache_btn.pack(side="left")
+        self.cache_label = tk.Label(row, font=self.fonts.small, fg=D.secondary, bg=D.panel, anchor="w")
+        self.cache_label.pack(side="left", padx=(self.px(8), 0))
+        Tooltip(self.cache_btn, tr("gui.cache.info"), self)
+        self._cache_state: tuple | None = None
+        self._cache_bytes = 0
 
         group = PanelGroup(panel, self, "performance", tr("gui.group.performance"), tr("gui.group.performance.info"))
         self.gpu_toggle = ParameterToggle(group.body, self, tr("gui.toggle.gpu"), self.gpu_var)
@@ -766,6 +799,87 @@ class PhotonsView(tk.Frame):
         elif IS_MAC:
             import subprocess
             subprocess.run(["open", str(folder)], check=False)
+
+    # ------------------------------------------------------------------ 新版本
+
+    def check_for_updates(self) -> None:
+        """有沒有新版：先用上次查到的結果顯示，一天沒查過才在背景連 GitHub（沒網路就算了）。
+        獨立版的 main() 開窗後呼叫；嵌在別的程式裡（APU Astro）時由外面決定要不要呼叫。"""
+        st = load_settings()
+        if not update.enabled(st):
+            self._show_update(None)
+            return
+        self._show_update(update.newer(update.cached(st)))
+        if update.due(st):
+            events = self.events
+
+            def work() -> None:
+                try:
+                    events.put(("update", update.fetch_latest()))
+                except Exception:  # noqa: BLE001  沒網路、被擋、格式不對：不打擾使用者
+                    pass
+
+            threading.Thread(target=work, daemon=True).start()
+
+    def set_update_check(self, on: bool) -> None:
+        save_settings(check_updates=bool(on))
+        if on:
+            self.check_for_updates()
+        else:
+            self._show_update(None)
+
+    def _show_update(self, info: update.Update | None) -> None:
+        self.update_info = info
+        if not hasattr(self, "update_badge") or not self.update_badge.winfo_exists():
+            return
+        if info is None:
+            self.update_badge.pack_forget()
+        else:
+            self.update_label.configure(text=tr("gui.update.badge", version=info.version))
+            self._update_tooltip.text = tr("gui.update.help", version=info.version, current=__version__,
+                                           file=info.file or tr("gui.update.page"))
+            self.update_badge.pack(side="left", padx=(self.px(5), 0))
+
+    def open_update(self) -> None:
+        if self.update_info is not None:
+            webbrowser.open(self.update_info.url)
+
+    def _version_menu(self, event: tk.Event) -> None:
+        D = Darkroom
+        menu = tk.Menu(self, tearoff=False, bg=D.group_header, fg=D.label, activebackground=D.hover,
+                       activeforeground=D.label, selectcolor=D.label, font=self.fonts.ui)
+        menu.add_checkbutton(label=tr("gui.menu.check_updates"), variable=self.update_check_var)
+        menu.add_command(label=tr("gui.menu.releases"), command=lambda: webbrowser.open(update.RELEASES_URL))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def cache_dirs(self) -> list[Path]:
+        """這個輸出資料夾的快取：正式疊圖的，與試跑的。"""
+        if not self.output_dir_var.get():
+            return []
+        return [default_cache(self.output_dir(trial)) for trial in (False, True)]
+
+    def _update_cache_info(self, busy: bool, force: bool = False) -> None:
+        """輸出資料夾換了、疊圖剛結束、剛清除時才重算大小（要走過整個快取資料夾）。"""
+        state = (self.output_dir_var.get(), busy)
+        if force or (state != self._cache_state and not busy):
+            self._cache_bytes = sum(cache_size(c) for c in self.cache_dirs())
+        self._cache_state = state
+        self.cache_label.configure(text=tr("gui.cache.size", size=format_size(self._cache_bytes))
+                                   if self._cache_bytes else tr("gui.cache.empty"))
+        self.cache_btn.state(["disabled"] if busy or not self._cache_bytes else ["!disabled"])
+
+    def _clear_cache(self) -> None:
+        if self.is_busy() or not self._cache_bytes:
+            return
+        if not messagebox.askyesno(APP_NAME, tr("gui.cache.confirm", size=format_size(self._cache_bytes)),
+                                   parent=self.root):
+            return
+        freed = sum(clear_cache(c) for c in self.cache_dirs())
+        self._update_cache_info(False, force=True)
+        self._status(lambda: tr("gui.cache.cleared", size=format_size(freed)))
 
     # ------------------------------------------------------------------ 濾鏡名稱對應
 
@@ -1274,6 +1388,10 @@ class PhotonsView(tk.Frame):
             self._stage = (stage, done, total)
             self._status(self._progress_text)
             self._update_progress()
+        elif kind == "update":
+            update.remember(event[1])
+            if update.enabled():
+                self._show_update(update.newer(event[1]))
         elif kind == "gpu":
             self._gpu_checked, self.gpu_name = True, event[1]
             self._update_gpu_view()
@@ -1369,6 +1487,7 @@ class PhotonsView(tk.Frame):
         out = self.output_dir_var.get()
         self.reveal_btn.state(["!disabled"] if out and Path(out).is_dir() else ["disabled"])
         self.output_label.configure(text=_short_path(out, 44) if out else tr("gui.output.unset"))
+        self._update_cache_info(busy)
         self._fill_align_controls()
         self._fill_files()
         self._fill_calibration()
@@ -1724,6 +1843,10 @@ def _build_menubar(root: tk.Tk, view: PhotonsView) -> None:
     edit_menu.add_command(label=tr("gui.menu.select_all"), accelerator="Command-A", command=view.select_all)
     menubar.add_cascade(label=tr("gui.menu.edit"), menu=edit_menu)
     menubar.add_cascade(label=tr("gui.menu.window"), menu=tk.Menu(menubar, name="window"))
+    help_menu = tk.Menu(menubar, name="help", tearoff=False)
+    help_menu.add_checkbutton(label=tr("gui.menu.check_updates"), variable=view.update_check_var)
+    help_menu.add_command(label=tr("gui.menu.releases"), command=lambda: webbrowser.open(update.RELEASES_URL))
+    menubar.add_cascade(label=tr("gui.menu.help"), menu=help_menu)
     root.configure(menu=menubar)
 
 
@@ -1786,6 +1909,7 @@ def main(argv: list[str] | None = None) -> int:
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
+    root.after(1500, view.check_for_updates)
     if IS_MAC:
         root.createcommand("::tk::mac::Quit", on_close)
         # 把檔案或資料夾拖到 Dock 圖示上：加入

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
@@ -13,6 +15,7 @@ from astropy.io import fits
 from scipy.ndimage import median_filter, uniform_filter
 
 from .backend import CPU, Backend
+from .cache import require_space, tmp_dir
 from .combine import clip_combine
 from .i18n import Msg
 from .imageio import cfa_masks, load_image, write_fits
@@ -42,14 +45,17 @@ def _cache_key(kind: str, paths: list[Path], extra: dict) -> str:
 
 
 def _combine_files(paths: list[Path], preprocess=None, be: Backend = CPU, workers: int = 1, memory_mb: int = 2048,
-                   progress=None) -> np.ndarray:
+                   progress=None, tmp_folder: Path | None = None) -> np.ndarray:
     """把一批 calibration frame 用 winsorized sigma clip 整合。
+    tmp_folder：暫存檔放的資料夾（引擎給快取的 tmp；整疊校正檔可能有幾十 GB，不放系統磁碟）。None＝系統暫存資料夾。
 
     先用多個執行緒讀進暫存 memmap，再分段整合：有 GPU 在顯示卡上做，否則分給多個行程（與 Stage 6 整合同一套做法）。
     progress(done, total)：已整合的列數。"""
     first, _ = load_image(paths[0])
     h, w = first.shape
-    path = _tmp_path(paths[0])
+    folder = Path(tmp_folder or tempfile.gettempdir())
+    require_space(folder, len(paths) * h * w * 4, "msg.space.masters")
+    path = _tmp_path(folder)
     tmp = np.lib.format.open_memmap(path, mode="w+", dtype=np.float32, shape=(len(paths), h, w))
     try:
         def load(i: int) -> None:
@@ -124,10 +130,10 @@ def _combine_band(band: tuple[int, int]) -> tuple[int, np.ndarray]:
     return r0, m
 
 
-def _tmp_path(p: Path) -> Path:
-    import tempfile
-
-    return Path(tempfile.gettempdir()) / f"apu_photons_{abs(hash(str(p)))}.npy"
+def _tmp_path(folder: Path) -> Path:
+    fd, name = tempfile.mkstemp(prefix="combine_", suffix=".npy", dir=folder)
+    os.close(fd)
+    return Path(name)
 
 
 def normalize_flat(flat: np.ndarray, bayer: str | None) -> np.ndarray:
@@ -193,6 +199,7 @@ class MasterBuilder:
         self.be, self.workers, self.memory_mb, self.progress = be, workers, memory_mb, progress
         self.mdir = cache / "masters"
         self.mdir.mkdir(parents=True, exist_ok=True)
+        self.tdir = tmp_dir(cache)
         self._memo: dict = {}
 
     def _combined(self, sid: str, extra: dict | None = None, preprocess=None) -> np.ndarray:
@@ -207,7 +214,7 @@ class MasterBuilder:
             return fits.getdata(path).astype(np.float32)
         self.log(Msg("msg.master_combine", kind=sid, n=len(paths)))
         data = _combine_files(paths, preprocess=preprocess, be=self.be, workers=self.workers,
-                              memory_mb=self.memory_mb, progress=self.progress)
+                              memory_mb=self.memory_mb, progress=self.progress, tmp_folder=self.tdir)
         hdr = fits.Header()
         hdr["IMAGETYP"] = f"MASTER {s.kind.upper().replace('_', '')}"
         hdr["NCOMBINE"] = len(paths)

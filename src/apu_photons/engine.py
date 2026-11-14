@@ -29,6 +29,7 @@ from . import drizzle as drizzle_mod
 from . import integrate as integrate_mod
 from . import localnorm
 from .backend import default_workers
+from .cache import clean_stale, default_cache, require_space
 from .combine import HIGH, LOW, OUT_OF_BOUNDS
 from .calibration import ALGO_VERSION as CALIB_VERSION, MasterBuilder
 from .drizzle import DrizzleSpec
@@ -173,8 +174,9 @@ def run(inputs: list[Path], output_dir: Path, settings: Settings | None = None, 
         if progress is not None:
             progress(stage, done, total)
     t0 = time.time()
-    cache = Path(cache) if cache else output_dir / ".photons_cache"
+    cache = Path(cache) if cache else default_cache(output_dir)
     cache.mkdir(parents=True, exist_ok=True)
+    clean_stale(cache)
     log = _Log(echo)
     warnings: list = []
     try:
@@ -245,6 +247,8 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
         report("masters")
         sig = _calib_signature(entry, project)
         tasks = [(str(f.path), str(cdir / f"{_calib_key(f, sig)}.npy")) for f in frames]
+        require_space(cdir, sum(f.shape[0] * f.shape[1] * 4 for f, (_src, dst) in zip(frames, tasks)
+                                if f.shape and not Path(dst).is_file()), "msg.space.calibrated")
         base = done
         # 自動設定、資料又很小時不開行程池：開行程池本身就要 1～2 秒，比校正與找星還久
         small = s.workers == 0 and sum((f.shape[0] * f.shape[1]) if f.shape else 0 for f in frames) < SMALL_PIXELS
@@ -552,13 +556,18 @@ def _integrate(frames, bayer, shape, s: Settings, gdir: Path, be, workers: int, 
     n = len(frames)
     log(Msg("msg.integrate_start", n=n, method=s.rejection, low=s.low, high=s.high))
     map_paths = None
+    h, w = shape
+    master_path = gdir / "master_stack.npy"
+    need = (3 if bayer else 1) * h * w * 4 - (master_path.stat().st_size if master_path.is_file() else 0)
     if s.keep_rejection_maps or s.drizzle:
         rdir = gdir / "rejection"
         rdir.mkdir(exist_ok=True)
         for old in rdir.glob("*.npy"):
             old.unlink()
         map_paths = [str(rdir / f"{i:04d}_{f.path.stem}.npy") for i, f in enumerate(frames)]
-    spec = BandSpec(bayer, shape, s.rejection, s.low, s.high, str(gdir / "master_stack.npy"), map_paths)
+        need += n * h * w
+    require_space(gdir, need, "msg.space.integrate")
+    spec = BandSpec(bayer, shape, s.rejection, s.low, s.high, str(master_path), map_paths)
     coverage, counts = integrate_mod.integrate(be, _jobs(frames), spec, workers, s.memory_mb, log, progress)
     return spec.master_path, coverage, counts, map_paths or [None] * n
 

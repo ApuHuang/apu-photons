@@ -935,4 +935,63 @@ _EN.update({
     'msg.local_norm_failed': '{group}: {n} frames overlap the reference too little; using global normalization ({names})',
 })
 
+# 快取管理與磁碟空間檢查
+_ZH.update({
+    'gui.btn.clear_cache': '清除快取',
+    'gui.cache.size': '快取 {size}',
+    'gui.cache.empty': '沒有快取',
+    'gui.cache.info': '快取放校正後的 frame 與 master 校正檔，下次疊同一批資料時不用重算。'
+                      '清除不會動到輸出的成品，只是下次要重新校正。',
+    'gui.cache.confirm': '要清除這個輸出資料夾的快取（{size}）嗎？\n輸出的成品不會被刪除；下次疊圖要重新校正。',
+    'gui.cache.cleared': '已清除快取，釋放 {size}',
+    'cli.clear_cache': '清除輸出資料夾的快取（校正後的 frame、master 校正檔、工作檔）',
+    'cli.clear_cache_need': '要給 -o 輸出資料夾 或 --cache 快取資料夾',
+    'msg.disk_full': '磁碟空間不足：{what}需要 {need}，{folder} 所在的磁碟只剩 {free}。'
+                     '請清除快取、清出空間，或改用其他磁碟的輸出資料夾',
+    'msg.space.masters': '建立 master 校正檔的暫存檔',
+    'msg.space.calibrated': '校正後的 frame',
+    'msg.space.integrate': '整合的工作檔',
+    'msg.space.drizzle': 'Drizzle 的工作檔',
+})
+_EN.update({
+    'gui.btn.clear_cache': 'Clear Cache',
+    'gui.cache.size': 'Cache {size}',
+    'gui.cache.empty': 'No cache',
+    'gui.cache.info': 'The cache holds calibrated frames and master calibration files, so stacking the same data '
+                      'again skips that work. Clearing it leaves your outputs alone; the next run calibrates again.',
+    'gui.cache.confirm': 'Clear the cache of this output folder ({size})?\nYour outputs are kept; '
+                         'the next run will calibrate again.',
+    'gui.cache.cleared': 'Cache cleared, {size} freed',
+    'cli.clear_cache': "clear the output folder's cache (calibrated frames, master calibration files, work files)",
+    'cli.clear_cache_need': 'give -o OUTPUT or --cache CACHE',
+    'msg.disk_full': 'Not enough disk space: {what} need {need}, but the disk holding {folder} has only {free} free. '
+                     'Clear the cache, free some space, or use an output folder on another disk',
+    'msg.space.masters': 'the temporary files for building master calibration files',
+    'msg.space.calibrated': 'the calibrated frames',
+    'msg.space.integrate': 'the integration work files',
+    'msg.space.drizzle': 'the Drizzle work files',
+})
+
+# 新版本提醒（文字與 APU Processing 相同）
+_ZH.update({
+    'gui.menu.help': '輔助說明',
+    'gui.menu.check_updates': '開啟時檢查新版本',
+    'gui.menu.releases': '下載頁面',
+    'gui.version.help': '按一下：設定要不要在開啟時檢查新版本、開啟下載頁面',
+    'gui.update.badge': '↓ 新版 v{version}',
+    'gui.update.help': '有新版本 {version}（目前是 {current}）。按一下用瀏覽器下載：{file}\n'
+                       '只會連到 GitHub 查版本，一天最多一次；不想檢查可以按一下版號關掉。',
+    'gui.update.page': '下載頁面',
+})
+_EN.update({
+    'gui.menu.help': 'Help',
+    'gui.menu.check_updates': 'Check for New Versions at Startup',
+    'gui.menu.releases': 'Download Page',
+    'gui.version.help': 'Click to choose whether to check for new versions at startup, or to open the download page',
+    'gui.update.badge': '↓ New v{version}',
+    'gui.update.help': 'Version {version} is available (you have {current}). Click to download it in your browser: '
+                       '{file}\nOnly GitHub is contacted, at most once a day; click the version number to turn this off.',
+    'gui.update.page': 'download page',
+})
+
 _CATALOG = {"zh": _ZH, "en": _EN}

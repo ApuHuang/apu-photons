@@ -401,7 +401,7 @@ Frame {
 ### 4.6 Cache
 - Cache key = `hash(stage_name, algorithm_version, params, upstream_keys, input_file_hash)`。
 - **演算法版本必須包含在 key 中**；升級演算法後，舊 cache 自動失效。
-- 位置：使用者的 cache 資料夾，可一鍵清除；同一套條件的 master 跨次執行共用。
+- 位置：輸出資料夾的 `.photons_cache`（CLI 可用 `--cache` 指定），可一鍵清除（介面按鈕或 `apu-photons clear-cache`，§10.9）；同一套條件的 master 跨次執行共用。
 
 ---
 
@@ -738,3 +738,23 @@ Mac 機用 Release `v0.2.1` 的 macos-arm64 實測（2026-10-27），回報 6 �
 - **Mac 下拉選單展開時箭頭是白方塊**：`Dark.TCombobox` 補 pressed／active／disabled 狀態的背景與箭頭顏色。
 - **資料很小時比 dev1 慢**：開行程池（spawn）本身要 1～2 秒。只有 1 段時直接在主行程做（建 master、整合、drizzle）；
   效能設成自動、張數 × 像素少於 40 MP 時，校正與找星不開行程池。手動指定行程數時照指定的（冒煙測試與 test_backends 仍測得到多行程）。
+
+### 10.9 磁碟管理與新版本提醒（2026-11-13，尚未發布）
+檢查專案後做的兩項（其他建議見對話紀錄，尚未做）：
+
+**磁碟管理**（`cache.py`）
+- **建 master 的暫存檔改放快取的 `tmp/`**：以前放系統暫存資料夾（通常是 C 槽），整疊校正檔是一個 memmap（313 張 dark 約 20 GB 以上）；
+  檔名又用每次啟動都不同的 `hash()`，被強制結束後留下的檔案不會被覆蓋。現在用 `mkstemp` 取名、放在輸出資料夾那顆磁碟。
+- **清掉中斷留下的暫存檔**：每次開跑清快取 `tmp/` 與系統暫存資料夾裡舊版的 `apu_photons_*.npy`，只刪超過 6 小時沒動的
+  （Mac 上刪掉另一個執行中的 Photons 正在用的檔案會讓它的工作行程開不了檔）。
+- **清除快取**：介面「輸出」那組的「清除快取」按鈕與大小（正式疊圖與試跑的快取一起算），CLI `apu-photons clear-cache -o 輸出資料夾`。
+  只刪 Photons 建立的子資料夾（calibrated、masters、groups、tmp）：`--cache` 可能指到使用者自己的資料夾。
+  大小只在換輸出資料夾、疊圖結束、清除後重算。
+- **磁碟空間檢查**：寫 master 暫存檔、校正後的 frame（只算還沒有快取的）、整合工作檔（master＋剔除遮罩）、Drizzle 工作檔之前，
+  空間不夠（另留 200 MB）就報錯並說明需要多少、剩多少。這裡不照「只提醒、照樣執行」：寫到一半才滿，錯誤訊息看不出原因，還留下半成品。
+
+**新版本提醒**（`update.py`，照 APU Processing 移植，APU Astro 的那份相同）
+- 開啟 1.5 秒後在背景查 GitHub 最新的 Release（不含預覽版），一天最多連一次，結果存在設定檔；沒網路、被擋都安靜略過。只查、不自己下載。
+- 有新版時頂部版號旁出現藍色「↓ 新版 vX.Y.Z」，按一下用瀏覽器下載這台電腦對應的 zip（Release 上還沒有就開 Release 頁面）。
+- 開關：Windows 沒有選單列，按一下版號跳出小選單（開啟時檢查新版本、下載頁面）；Mac 另外在「輔助說明」選單。設定 `check_updates=false`。
+- `check_for_updates()` 由獨立版的 `main()` 呼叫；嵌在 APU Astro 裡時不會自己查。版本號不是純數字（例如 `.dev1`）時不提醒。

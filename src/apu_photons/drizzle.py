@@ -12,12 +12,14 @@ CPU 用多個行程分條處理，GPU 用同一份程式（xp = cupy）依序處
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 
 from .backend import CPU, Backend
+from .cache import require_space
 from .combine import HIGH, LOW
 from .i18n import Msg
 from .integrate import FrameJob
@@ -175,6 +177,8 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
     ho, wo = h * spec.scale, w * spec.scale
     nch = 3 if spec.bayer else 1
     img_path, wgt_path = str(workdir / "drizzle_image.npy"), str(workdir / "drizzle_weight.npy")
+    existing = sum(os.path.getsize(p) for p in (img_path, wgt_path) if os.path.isfile(p))
+    require_space(workdir, 2 * nch * ho * wo * 4 - existing, "msg.space.drizzle")
     np.lib.format.open_memmap(img_path, mode="w+", dtype=np.float32, shape=(nch, ho, wo)).flush()
     np.lib.format.open_memmap(wgt_path, mode="w+", dtype=np.float32, shape=(nch, ho, wo)).flush()
     # 每個輸入像素運算時約用 ~150 bytes 暫存；輸入列數約為輸出列數 / scale

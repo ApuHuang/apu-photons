@@ -105,6 +105,12 @@ def test_stack_flow_and_language(app, tmp_path):
     assert app.metrics["integrated"].value.cget("text") == "8"
     assert app.stack_btn.cget("text") == "Stack"
     assert app.image_canvas.path == app.result.output
+    # 快取：疊完顯示大小，清除後成品還在
+    cache = tmp_path / "out" / ".photons_cache"
+    assert app._cache_bytes > 0 and "disabled" not in app.cache_btn.state()
+    app._clear_cache()
+    assert app._cache_bytes == 0 and not cache.exists() and "disabled" in app.cache_btn.state()
+    assert app.result.output.is_file()
 
 
 def test_language_keeps_open_groups_and_selection(app, tmp_path):
@@ -341,3 +347,27 @@ def test_assign_calibration_and_flat_sub(app, tmp_path):
     app._cal_combo_selected("flat_sub")
     app.wait_plan()
     assert app.plan.calib_groups[gk]["flat_sub"] is None and app.plan.calib_groups[gk]["source"] == "user"
+
+
+def test_update_badge_shows_only_for_a_newer_version(app, monkeypatch):
+    opened, fetched = [], []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    monkeypatch.setattr(gui.update, "fetch_latest", lambda *a, **k: fetched.append(1) or {})
+    assert app.update_badge.winfo_manager() == ""                      # 一開始沒有
+    app.events.put(("update", {"tag_name": f"v{gui.__version__}", "assets": []}))
+    app.drain()
+    assert gui.update.cached() is not None                              # 查到的結果有存起來
+    assert app.update_info is None and app.update_badge.winfo_manager() == ""
+    zip_name = f"APUPhotons-99.0.0-{gui.update.platform_tag()}.zip"
+    app.events.put(("update", {"tag_name": "v99.0.0", "html_url": "https://github.com/x/releases/tag/v99.0.0",
+                               "assets": [{"name": zip_name, "browser_download_url": "https://github.com/x/dl.zip"}]}))
+    app.drain()
+    assert app.update_badge.winfo_manager() == "pack" and "99.0.0" in app.update_label.cget("text")
+    app.open_update()
+    assert opened == ["https://github.com/x/dl.zip"]
+    app.rebuild()                                                       # 換語言重建後還在
+    assert app.update_badge.winfo_manager() == "pack"
+    app.update_check_var.set(False)                                     # 關掉檢查
+    assert app.update_badge.winfo_manager() == "" and not gui.update.enabled()
+    app.update_check_var.set(True)                                      # 再打開：一天內用存起來的結果，不連網
+    assert app.update_info.version == "99.0.0" and fetched == []
