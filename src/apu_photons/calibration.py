@@ -63,7 +63,7 @@ def _combine_files(paths: list[Path], preprocess=None, be: Backend = CPU, worker
             if data.shape != (h, w):
                 raise ValueError(Msg("msg.size_mismatch", name=paths[i].name, shape=data.shape, first=paths[0].name,
                                      first_shape=(h, w)))
-            tmp[i] = preprocess(data) if preprocess else data
+            tmp[i] = preprocess(data) if preprocess else data  # noqa: F821  下面的 del tmp 讓 ruff 以為沒定義
 
         with ThreadPoolExecutor(max_workers=max(1, min(READ_THREADS, workers, len(paths)))) as io:
             list(io.map(load, range(len(paths))))

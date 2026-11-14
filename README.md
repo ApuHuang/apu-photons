@@ -5,8 +5,9 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 工作流：**[APU Pick](https://github.com/ApuHuang/apu-pick)**（挑片）→ **APU Photons**（疊圖）→
 **[APU Processing](https://github.com/ApuHuang/apu-processing)**（後製），同屬 APU Astro 系列。
 
-目前版本 **0.2.2**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
-彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。設計規格見 [SPEC.md](SPEC.md)。
+目前版本 **0.3.0**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
+彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。0.3 新增：有新版時會提醒、清除快取與磁碟空間檢查、
+抑制亮星旁的暗環、選用的畸變修正、Drizzle 加速。設計規格見 [SPEC.md](SPEC.md)。
 
 ## 下載與安裝
 
@@ -56,10 +57,10 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 | 0 Ingest | FITS 與相機 RAW（2×2 Bayer）；輸入是檔案，類型依 `IMAGETYP`、檔名、資料夾名稱判斷；已經疊好的成品（Seestar 的 `Stacked_*.fit` 等）自動跳過；分光學系統（相機＋焦距）、濾鏡（大小寫與空白自動歸併）、觀測夜；讀 APU Pick sidecar |
 | 1 Master | 校正檔依條件分套，自動配對：dark（相機、增益、offset、曝光、溫度 ±2°C）、bias、flat（濾鏡、同一晚）、flat-dark；做好的 master 直接用；winsorized sigma clip 整合（GPU 或多行程），快取 |
 | 2 校正 | 在 CFA 原始資料上校正；flat 各色分別正規化；熱像素（master dark 的局部偵測 + 單張集中度偵測）與冷像素修正 |
-| 3 對齊 | 星點偵測（CFA 用 super-pixel）、三角形配對 + RANSAC 相似變換、中天翻轉；每個對齊組一張參考 frame，組內各濾鏡都對齊到它；縮放不合理或與參考重疊太少的判為對齊失敗 |
+| 3 對齊 | 星點偵測（CFA 用 super-pixel）、三角形配對 + RANSAC 相似變換、中天翻轉；可選畸變修正（相似變換之外再加低階多項式）；每個對齊組一張參考 frame，組內各濾鏡都對齊到它；縮放不合理或與參考重疊太少的判為對齊失敗 |
 | 4 正規化 | 整合組內，以配對星點的亮度比當 scale、背景中位數當 offset；可選「局部正規化」：offset 改成平滑的面，各張的光害梯度對齊到參考 frame |
 | 5 權重 | SNR² / FWHM²（SNR 以正規化後的雜訊計）；APU Pick 的 reject 當篩選；權重算不出來的 frame 排除 |
-| 6 整合 | 每個整合組（光學系統 × 濾鏡）各自整合；分段（band）串流，不一次載入全部；winsorized / sigma / average / median；保存每張的剔除遮罩；沒有有效像素的組不輸出 |
+| 6 整合 | 每個整合組（光學系統 × 濾鏡）各自整合；分段（band）串流，不一次載入全部；winsorized / sigma / average / median；內插限幅（亮星旁不出現暗環）；保存每張的剔除遮罩；沒有有效像素的組不輸出 |
 | 7 Drizzle | 1× / 2×（對齊組統一）；OSC 用 CFA drizzle（不解馬賽克、各色像素直接投進 R/G/B 網格）；沿用 Stage 4~6 的正規化、權重、剔除遮罩；輸出權重圖、零星空洞自動補；張數或 dither 不足只提醒 |
 | 8 輸出 | 每組一個 master（`<目標>_<濾鏡>.fits`）與覆蓋率圖；彩色相機＋雙窄帶濾鏡（Seestar 的 LP、L-eXtreme 等）另存 Ha、OIII 兩個單色 master；對齊組共用裁切範圍（預設至少 90% 的 frame 覆蓋）；Downsample 0.5×、32-bit / 16-bit FITS、專案一份 `recipe.json` 與 log |
 | QC | 剔除原因統計、FWHM 分布、dither 分析與 drizzle 適用性、剔除像素特別多的 frame 分原因給建議（天光變化或梯度、雲、衛星與飛機）、沒用到的校正檔與原因 |
@@ -68,6 +69,12 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 
 局部正規化（`--local-norm`，預設關閉）：多晚拍攝、各晚光害梯度不同時使用，剔除才不會把梯度差當成離群值；
 成品保留參考 frame 的梯度，交給後製去除。過雲的片救不了。
+
+畸變修正（`--distortion`，預設關閉）：廣角鏡頭而各張位移很大（沒導星的漂移、拼接），或合併不同光學系統時使用；
+同一套器材、位移只有幾十個像素時用不到。目前只用合成資料驗證過。
+
+抑制亮星暗環（預設開啟，`--no-clamp` 關閉）：內插在欠取樣的星、飽和星旁會衝到比天空還低，疊起來是一圈暗環；
+現在亮星附近的內插結果不低於鄰近像素。0.2 以前沒有這一步，要與舊版結果完全相同時關掉。
 
 ### 效能
 
@@ -107,14 +114,14 @@ light 與校正檔一起給（檔案或資料夾；資料夾等同其中的影�
 
 常用選項：`--lang en`（英文）、`--preview 20`（每組抽樣試跑）、`--target 名稱`、`--temp-tolerance 2`、`--flat-any-night`（某晚沒有 flat 時用最近一晚的）、
 `--min-coverage 0.9`、`--no-crop`、`--filter-alias H-alpha=Ha`、`--merge "相機A @ 400mm,相機B @ 400mm"`、
-`--downsample`、`--rejection sigma`、`--local-norm`（局部正規化）、`--no-dual-band`（雙窄帶不另存 Ha／OIII）、`--reference 檔名`、`--memory 4096`、`--bits 16`。`apu-photons stack -h` 看全部。
+`--downsample`、`--rejection sigma`、`--local-norm`（局部正規化）、`--distortion`（畸變修正）、`--no-clamp`、`--no-dual-band`（雙窄帶不另存 Ha／OIII）、`--reference 檔名或路徑`、`--memory 4096`、`--bits 16`。`apu-photons stack -h` 看全部。
 
 校正後的中介檔、master 與剔除遮罩放在輸出資料夾的 `.photons_cache/`，重跑會沿用；可以直接刪掉，或用「輸出」裡的「清除快取」按鈕、`apu-photons clear-cache -o 輸出資料夾`。
 
 ## 打包
 
 ```sh
-.venv\Scripts\pip install -e ".[exe,gpu]" matplotlib   # matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
+.venv\Scripts\pip install -c packaging\constraints.txt -e ".[exe,gpu]" matplotlib   # 版本照 constraints.txt；matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
 .venv\Scripts\python packaging\build_exe.py            # → dist\APUPhotons-<版本>-win64.zip（約 243 MB）
 ```
 
@@ -139,7 +146,10 @@ Windows 版也可以由雲端 Windows 打包（`.github/workflows/build-windows.
 
 用合成星場驗證：已知位移／旋轉的對齊精度、中天翻轉、衛星軌跡剔除、熱像素與暗角修正、APU Pick sidecar 篩選、Preview 與 Downsample；
 0.2 另有檔案分類、多濾鏡分組與像素對齊、dark 配對忽略濾鏡、flat 依觀測夜、做好的 master、合併光學系統、載入 Recipe、放大檢視、
-壞 frame（權重算不出來、對齊到別處）不拖垮 master、master 校正檔多行程與 GPU 結果一致、局部正規化對齊各張的梯度。
+壞 frame（權重算不出來、對齊到別處）不拖垮 master、master 校正檔多行程與 GPU 結果一致、局部正規化對齊各張的梯度；
+0.3 另有快取管理與磁碟空間檢查、新版本提醒、內插限幅、畸變修正、同名檔的參考 frame。
+
+程式碼檢查：`.venv\Scripts\python -m ruff check .`。推上 master 時雲端會自動跑 ruff 與核心測試。
 
 ## English
 
@@ -153,6 +163,8 @@ Free and open source (MIT); the interface is available in English and Traditiona
 - CFA Drizzle for colour cameras; dual-band filters (Seestar LP, L-eXtreme, …) also give Ha and OIII mono masters
 - Advice after stacking (dawn or moonlight, cloud, satellites; Drizzle and crop hints); optional local normalization
 - NVIDIA GPU acceleration on Windows without installing CUDA; multi-core CPU otherwise
+- New in 0.3: update reminder, cache clearing and disk space checks, no dark rings around bright stars,
+  optional distortion correction, faster Drizzle
 
 **Download** the latest version from [Releases](https://github.com/ApuHuang/apu-photons/releases/latest)
 (Windows 10 / 11 64-bit, Mac Apple silicon and Intel) — no Python needed. On Windows, unzip and run `APUPhotons.exe`

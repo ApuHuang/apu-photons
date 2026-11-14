@@ -10,9 +10,13 @@ import sys
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import font, ttk
+from typing import TYPE_CHECKING
 
 from .i18n import tr
 from .settings import save_settings
+
+if TYPE_CHECKING:
+    from .gui import PhotonsView
 
 IS_MAC = sys.platform == "darwin"
 

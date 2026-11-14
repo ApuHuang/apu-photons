@@ -88,6 +88,7 @@ def test_bayer_offset_and_night():
 
 def test_night_without_longitude_uses_computer_timezone(monkeypatch):
     from datetime import timedelta
+
     from apu_photons import ingest
     monkeypatch.setattr(ingest, "_local_offset", lambda t: timedelta(hours=8))  # 台灣
     # 地方時晚上 7 點的 flat 與 10 點的 light 屬於同一晚（以前 UTC 中午切，flat 會算到前一晚）
@@ -264,7 +265,7 @@ def test_headless_defaults_without_calibration(tmp_path):
         "print(res.qc['frames_integrated'])\n"
     )
     script = tmp_path / "headless.py"  # 寫成檔案：用 stdin 餵的話多行程 spawn 找不到主程式
-    script.write_text("if __name__ == '__main__':\n" + "".join("    " + l + "\n" for l in code.splitlines()))
+    script.write_text("if __name__ == '__main__':\n" + "".join("    " + line + "\n" for line in code.splitlines()))
     proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(len(SHIFTS))

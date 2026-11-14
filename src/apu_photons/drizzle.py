@@ -209,7 +209,7 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
         log(Msg("msg.drizzle_gpu", device=be.device, rows=rows, strips=len(strips)))
         cals = [np.load(j.cal_path, mmap_mode="r") for j in jobs]
         rmaps = [np.load(p, mmap_mode="r") for p in spec.map_paths] if spec.map_paths else None
-        for i, (q0, q1) in enumerate(strips, 1):
+        for q0, q1 in strips:
             acc, wsum = drizzle_strip(be, jobs, cals, rmaps, spec, q0, q1)
             _store(img_path, wgt_path, q0, be.to_numpy(acc), be.to_numpy(wsum))
             del acc, wsum

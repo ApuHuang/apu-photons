@@ -1,0 +1,41 @@
+# 推上 master 或開 PR 時跑程式碼檢查（ruff）與核心測試，不打包。
+# 只有改到程式、測試或套件設定時才跑；用雲端 Linux（最快，公開 repo 不計費）。
+# 視窗測試需要圖形環境、GPU 測試需要顯示卡，這裡都不跑：發布時的打包 workflow 與 Windows 開發機會測。
+name: 測試
+
+on:
+  push:
+    branches: [master]
+    paths: ["src/**", "tests/**", "pyproject.toml", "packaging/constraints.txt", ".github/workflows/test.yml"]
+  pull_request:
+    paths: ["src/**", "tests/**", "pyproject.toml", "packaging/constraints.txt", ".github/workflows/test.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: 安裝
+        run: python -m pip install -c packaging/constraints.txt -e ".[dev]"
+
+      - name: 程式碼檢查
+        run: python -m ruff check .
+
+      - name: 測試（核心）
+        run: python -m pytest -q --ignore=tests/test_gui.py -o faulthandler_timeout=240

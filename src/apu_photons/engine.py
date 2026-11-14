@@ -24,22 +24,23 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from . import __version__, backend
+from . import __version__, backend, localnorm
 from . import drizzle as drizzle_mod
 from . import integrate as integrate_mod
-from . import localnorm
 from .backend import default_workers
 from .cache import clean_stale, default_cache, require_space
+from .calibration import ALGO_VERSION as CALIB_VERSION
+from .calibration import MasterBuilder
 from .combine import HIGH, LOW, OUT_OF_BOUNDS
-from .calibration import ALGO_VERSION as CALIB_VERSION, MasterBuilder
 from .drizzle import DrizzleSpec
-from .imageio import row_order, write_fits
 from .i18n import Msg, tr
+from .imageio import row_order, write_fits
 from .ingest import filter_names, ingest, path_key, safe_name, unused_text
 from .integrate import BandSpec, FrameJob
 from .model import ACCEPTED, AlignGroup, Frame, IntegrationGroup, Project
 from .prepare import channel_locations, prepare
-from .register import ALGO_VERSION as REG_VERSION, overlap_fraction, register_many
+from .register import ALGO_VERSION as REG_VERSION
+from .register import overlap_fraction, register_many
 
 MIN_STARS = 10
 MIN_GROUP_FRAMES = 2

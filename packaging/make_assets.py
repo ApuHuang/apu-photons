@@ -28,7 +28,7 @@ def draw_icon() -> Image.Image:
     d.rounded_rectangle((0, 0, SIZE - 1, SIZE - 1), radius=SIZE * 0.2, fill=NAVY)
 
     # 三張錯開的 frame（疊圖），由後往前越來越亮
-    for i, (dx, dy, alpha) in enumerate(((-120, -120, 70), (-60, -60, 120), (0, 0, 190))):
+    for dx, dy, alpha in ((-120, -120, 70), (-60, -60, 120), (0, 0, 190)):
         layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
         x0, y0 = 0.30 * SIZE + dx, 0.30 * SIZE + dy
         x1, y1 = 0.80 * SIZE + dx, 0.80 * SIZE + dy

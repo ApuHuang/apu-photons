@@ -1,0 +1,15 @@
+# 打包與測試用的套件版本：雲端每次都重新安裝，不鎖的話會裝到當天最新的版本，
+# 上游一改就可能打包失敗或行為不同（photutils 3.0 改參數名稱、3.1 匯入時要讀 scipy 的套件資訊，2026-10 各壞過一次）。
+# 這些是 Windows 開發機實際測過、0.3.0 打包用的版本。要升級時：本機升級、跑完測試與打包冒煙測試，再改這裡。
+# 用法：pip install -c packaging/constraints.txt -e ".[exe]"
+# rawpy 不鎖：0.27.1 沒有 Intel Mac 的 wheel，鎖了 Intel 版會裝不起來。
+numpy==2.5.3
+scipy==1.18.1
+astropy==8.0.2
+pyerfa==2.0.1.5
+photutils==3.1.0
+pillow==12.3.0
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.7
+cupy-cuda12x==14.2.0
+matplotlib==3.11.2

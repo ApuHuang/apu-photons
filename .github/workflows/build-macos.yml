@@ -36,7 +36,7 @@ jobs:
 
       # Mac 沒有 CUDA，不裝 GPU 套件；matplotlib 只給 astropy 的打包 hook 掃描用，不會打包進去
       - name: 安裝
-        run: python -m pip install -e ".[exe]" matplotlib pytest
+        run: python -m pip install -c packaging/constraints.txt -e ".[exe]" matplotlib pytest
 
       - name: 測試（核心）
         timeout-minutes: 20

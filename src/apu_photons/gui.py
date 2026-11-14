@@ -26,9 +26,21 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import __version__, backend, update
 from .cache import cache_size, clear_cache, default_cache, format_size
-from .darkroom import (Darkroom, Fonts, MetricRow, PanelGroup, ParameterSlider, ParameterToggle, Segmented, Tooltip,
-                       _short_path, dark_title_bar, enable_dpi_awareness, setup_style)
-from .engine import ALIGN_OUTPUT_KEYS, Cancelled, Result, Settings, run
+from .darkroom import (
+    Darkroom,
+    Fonts,
+    MetricRow,
+    PanelGroup,
+    ParameterSlider,
+    ParameterToggle,
+    Segmented,
+    Tooltip,
+    _short_path,
+    dark_title_bar,
+    enable_dpi_awareness,
+    setup_style,
+)
+from .engine import Cancelled, Result, Settings, run
 from .i18n import APP_NAME, LANGUAGES, get_language, set_language, tr
 from .imageio import IMAGE_SUFFIXES
 from .ingest import SUB_KINDS, expand_inputs, filter_names, ingest, unused_text

@@ -90,7 +90,7 @@ def test_register_many_parallel_matches_sequential():
     rng = np.random.default_rng(3)
     ref = rng.uniform(0, 1000, (60, 2))
     tasks = []
-    for i in range(9):
+    for _ in range(9):
         th = np.radians(rng.uniform(-2, 2))
         rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
         src = (ref - 500) @ rot.T + 500 + rng.uniform(-20, 20, 2) + rng.normal(0, 0.05, ref.shape)

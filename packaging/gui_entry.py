@@ -43,7 +43,9 @@ def smoke_test(out: str, inputs: list[str], expect_gpu: bool) -> int:
         has_gpu = backend.select("auto").gpu
         if not has_gpu and expect_gpu:
             # 沒有 GPU 的電腦：CuPy 要能載入，只是找不到顯示卡或驅動
-            assert backend.last_error and "ModuleNotFound" not in backend.last_error                 and "ImportError" not in backend.last_error, f"CuPy 沒有打包好：{backend.last_error}"
+            loaded = (backend.last_error and "ModuleNotFound" not in backend.last_error
+                      and "ImportError" not in backend.last_error)
+            assert loaded, f"CuPy 沒有打包好：{backend.last_error}"
             lines.append(f"gpu: none ({backend.last_error})")
         for mode in ["cpu"] + (["gpu"] if has_gpu else []):
             out_dir = result.parent / f"smoke_{mode}"

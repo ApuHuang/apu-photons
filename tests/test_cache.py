@@ -4,7 +4,6 @@ import os
 import tempfile
 import time
 
-import numpy as np
 import pytest
 
 from apu_photons import cache as cache_mod
