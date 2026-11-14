@@ -88,7 +88,9 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
             luts[pattern] = xp.asarray(_chan_lut(pattern))
         lut = luts[pattern]
         hw = spec.pixfrac * float(np.sqrt(abs(np.linalg.det(t[:2, :2])))) * s / 2.0  # drop 半寬（輸出像素）
-        reach = int(np.ceil(hw + 0.5))
+        # drop 最遠伸到最近那格的中心外 hw + 0.5，第 r 格涵蓋到 r + 0.5：往外看 ceil(hw) 格就夠
+        # （以前是 ceil(hw + 0.5)：pixfrac 0.9、2× 時看 5×5 格，其實只有 3×3 格碰得到）
+        reach = max(1, int(np.ceil(hw - 1e-9)))
         y0, y1, x0, x1 = _input_bounds(t, q0, q1, spec, hw, cal.shape)
         if y1 - y0 < 1 or x1 - x0 < 1:
             continue
@@ -124,6 +126,9 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
         ju0 = xp.floor(u + 0.5).astype(xp.int64)
         jq0 = xp.floor(q + 0.5).astype(xp.int64)
         wgt = float(job.weight)
+        # 這張所有 drop 落到的（輸出像素, 面積）先收集起來，最後只累加一次：
+        # 以前每個 (dy, dx) 各做兩次 bincount，每次都配置並掃過整條輸出（2× 時是輸入的 12 倍大），大半時間花在那裡
+        parts_idx, parts_a, parts_v = [], [], []
         for dy in range(-reach, reach + 1):
             jq = jq0 + dy
             oy = xp.minimum(q + hw, jq + 0.5) - xp.maximum(q - hw, jq - 0.5)
@@ -135,10 +140,16 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
                 ox = xp.minimum(u + hw, ju + 0.5) - xp.maximum(u - hw, ju - 0.5)
                 ok = oky & (ox > 0) & (ju >= 0) & (ju < wo)
                 a = (ox[ok] * oy[ok] * wgt).astype(xp.float64)
-                idx = chk[ok] * npix + jq[ok] * wo + ju[ok]
-                if idx.size:
-                    acc += xp.bincount(idx, weights=a * val[ok], minlength=nch * npix).astype(xp.float32)
-                    wsum += xp.bincount(idx, weights=a, minlength=nch * npix).astype(xp.float32)
+                if a.size:
+                    parts_idx.append(chk[ok] * npix + jq[ok] * wo + ju[ok])
+                    parts_a.append(a)
+                    parts_v.append(a * val[ok])
+        if parts_idx:
+            idx = xp.concatenate(parts_idx)
+            del parts_idx
+            acc += xp.bincount(idx, weights=xp.concatenate(parts_v), minlength=nch * npix).astype(xp.float32)
+            del parts_v
+            wsum += xp.bincount(idx, weights=xp.concatenate(parts_a), minlength=nch * npix).astype(xp.float32)
     return acc.reshape(nch, rows, wo), wsum.reshape(nch, rows, wo)
 
 
@@ -181,8 +192,8 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
     require_space(workdir, 2 * nch * ho * wo * 4 - existing, "msg.space.drizzle")
     np.lib.format.open_memmap(img_path, mode="w+", dtype=np.float32, shape=(nch, ho, wo)).flush()
     np.lib.format.open_memmap(wgt_path, mode="w+", dtype=np.float32, shape=(nch, ho, wo)).flush()
-    # 每個輸入像素運算時約用 ~150 bytes 暫存；輸入列數約為輸出列數 / scale
-    per_out_row = w / spec.scale * 150 + nch * wo * 8
+    # 每個輸入像素運算時約用 ~400 bytes 暫存（每個 drop 落到的幾格先收集起來再累加）；輸入列數約為輸出列數 / scale
+    per_out_row = w / spec.scale * 400 + nch * wo * 8
     log = log or (lambda _m: None)
 
     if be.gpu:
@@ -231,11 +242,12 @@ def drizzle(be: Backend, jobs: list[FrameJob], spec: DrizzleSpec, workdir, worke
     return DrizzleResult(img, wsum, holes)
 
 
-def fill_holes(img: np.ndarray) -> np.ndarray:
-    """把沒有資料的像素用周圍 3×3 有資料的平均補上（只補零星的洞；大片空白留 NaN）。"""
+def fill_holes(img: np.ndarray, inplace: bool = False) -> np.ndarray:
+    """把沒有資料的像素用周圍 3×3 有資料的平均補上（只補零星的洞；大片空白留 NaN）。
+    inplace：直接改 img，不另外複製一份（2× drizzle 的彩色大圖一份就是幾 GB）。"""
     from scipy.ndimage import uniform_filter
 
-    out = img.copy()
+    out = img if inplace else img.copy()
     for c in range(out.shape[0]):
         ch = out[c]
         bad = ~np.isfinite(ch)

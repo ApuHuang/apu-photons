@@ -685,17 +685,12 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
         std = master if crop is None else master[..., crop[1]:crop[3], crop[0]:crop[2]]
         write_fits(stack_out, std, hdr, bits=s.output_bits)
         log(Msg("msg.stack_saved", name=stack_out.name))
-        img, weight = driz.image, driz.weight
-        if s.fill_holes:
-            img = drizzle_mod.fill_holes(img)
-        if not bayer:
-            img, weight = img[0], weight[0]
+        # 2× drizzle 的彩色大圖每一份都是幾 GB：weight 先存檔放掉，補洞直接改在原本的陣列上，不同時留好幾份
         k = s.drizzle
-        cov = np.repeat(np.repeat(coverage, k, axis=0), k, axis=1)
+        sl = (Ellipsis, slice(None), slice(None))
         if crop is not None:
             x0, y0, x1, y1 = (v * k for v in crop)
-            img, weight, cov = img[..., y0:y1, x0:x1], weight[..., y0:y1, x0:x1], cov[y0:y1, x0:x1]
-        master = img
+            sl = (Ellipsis, slice(y0, y1), slice(x0, x1))
         hdr["DRIZZLE"] = (k, "drizzle output scale")
         hdr["PIXFRAC"] = s.pixfrac
         if "XPIXSZ" in hdr:
@@ -704,7 +699,14 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
         whdr["ROWORDER"] = hdr["ROWORDER"], hdr.comments["ROWORDER"]
         whdr["DRIZZLE"] = (k, "drizzle output scale")
         weight_out = output.with_name(output.stem + "_weight" + output.suffix)
-        write_fits(weight_out, weight, whdr)
+        write_fits(weight_out, (driz.weight if bayer else driz.weight[0])[sl], whdr)
+        img = driz.image
+        del driz
+        if s.fill_holes:
+            img = drizzle_mod.fill_holes(img, inplace=True)
+        master = (img if bayer else img[0])[sl]
+        del img
+        cov = np.repeat(np.repeat(coverage, k, axis=0), k, axis=1)[sl[1:]]
     else:
         report("output")
         cov = coverage
