@@ -396,7 +396,8 @@ class PhotonsView(tk.Frame):
         tk.Label(row, text=tr("gui.output.bits"), font=self.fonts.ui, fg=D.label, bg=D.panel).pack(side="left")
         Segmented(row, self, [("32", "32-bit"), ("16", "16-bit")], self.bits_var).pack(side="right")
         tk.Label(group.body, text=tr("gui.output.target"), font=self.fonts.small, fg=D.secondary,
-                 bg=D.panel).pack(anchor="w", pady=(self.px(10), 0))
+                 bg=D.panel, justify="left", wraplength=self.px(D.panel_width - 40)
+                 ).pack(anchor="w", pady=(self.px(10), 0))
         self.target_entry = ttk.Entry(group.body, textvariable=self.target_var, style="Dark.TEntry",
                                       font=self.fonts.ui)
         self.target_entry.pack(fill="x", pady=(self.px(3), 0))

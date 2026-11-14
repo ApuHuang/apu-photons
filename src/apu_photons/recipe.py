@@ -67,6 +67,8 @@ def load_recipe(path: Path, reproduce: bool = False, base: Settings | None = Non
         if (size is not None and p.stat().st_size != size) or (sha and cached_sha256(p) != sha):
             out.warnings.append(Msg("msg.recipe_changed", name=p.name))
         out.files.append(p)
-    refs = [a.get("reference_frame") for a in doc.get("align_groups", []) if a.get("reference_frame")]
+    # 0.3 起有完整路徑（不同資料夾的同名檔才分得出來）；0.2 的 recipe 只有檔名
+    refs = [a.get("reference_path") or a.get("reference_frame") for a in doc.get("align_groups", [])
+            if a.get("reference_path") or a.get("reference_frame")]
     s.reference = refs or None
     return out

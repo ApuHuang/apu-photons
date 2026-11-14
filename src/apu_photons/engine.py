@@ -35,7 +35,7 @@ from .calibration import ALGO_VERSION as CALIB_VERSION, MasterBuilder
 from .drizzle import DrizzleSpec
 from .imageio import row_order, write_fits
 from .i18n import Msg, tr
-from .ingest import filter_names, ingest, safe_name, unused_text
+from .ingest import filter_names, ingest, path_key, safe_name, unused_text
 from .integrate import BandSpec, FrameJob
 from .model import ACCEPTED, AlignGroup, Frame, IntegrationGroup, Project
 from .prepare import channel_locations, prepare
@@ -58,7 +58,7 @@ class Settings:
     weighting: str = "snr2_over_fwhm2"  # snr2_over_fwhm2 / none
     normalization: str = "global"      # global（每通道一個 offset）/ local（offset 是平滑的面，對齊各張的梯度）
     dual_band: bool = True             # 彩色相機＋雙窄帶濾鏡（認得出的名稱）時，另存 Ha 與 OIII 兩個單色 master
-    reference: str | list | None = None  # 參考 frame 的檔名（可以多個，各自套用到所在的對齊組）；None = 自動
+    reference: str | list | None = None  # 參考 frame 的完整路徑或檔名（可以多個，各自套用到所在的對齊組）；None = 自動
     downsample: float = 1.0            # 1.0 或 0.5
     crop_common: bool = True
     crop_min_coverage: float = 0.9     # 裁到至少這個比例的 frame 覆蓋的範圍
@@ -361,9 +361,26 @@ def _rank_frames(frames: list[Frame]) -> list[Frame]:
     return [good[i] for i in np.argsort(score, kind="stable")]
 
 
+def _find_frame(frames: list[Frame], ref: str) -> Frame | None:
+    """ref 是完整路徑或檔名。先比路徑：不同晚的資料夾常有同名的檔（相機 RAW 的 IMG_0001.CR2），只比檔名會指到別張。
+    檔名（0.2 的 recipe、命令列手打的）只在找不到路徑時才比。"""
+    try:
+        key = path_key(ref)
+    except (OSError, ValueError):
+        key = None
+    return (next((f for f in frames if key and path_key(f.path) == key), None)
+            or next((f for f in frames if f.name == ref), None))
+
+
+def _frame_labels(frames: list) -> list[str]:
+    """給人看的名稱：檔名；這批裡有同名的檔時加上所在的資料夾，才分得出是哪一張。"""
+    names = [f.name for f in frames]
+    return [n if names.count(n) == 1 else f"{f.path.parent.name}/{n}" for f, n in zip(frames, names)]
+
+
 def _choose_reference(frames: list[Frame], name: str | None, warnings: list, quiet: bool = False) -> Frame:
     if name:
-        hit = next((f for f in frames if f.name == name), None)
+        hit = _find_frame(frames, name)
         if hit:
             return hit
         if not quiet:
@@ -378,8 +395,8 @@ def _align_and_integrate(ag: AlignGroup, s: Settings, project: Project, cache: P
     if not frames:
         return []
     names = [s.reference] if isinstance(s.reference, str) else list(s.reference or [])
-    mine = next((n for n in names if any(f.name == n for f in frames)), None)
-    others = any(f.name == n for n in names for f in project.lights)
+    mine = next((n for n in names if _find_frame(frames, n)), None)
+    others = any(_find_frame(project.lights, n) for n in names)
     grid = _grid_train(ag, project, s)
     if len(ag.trains) > 1:
         log(Msg("msg.merge_grid", group=ag.id, train=grid))
@@ -808,7 +825,7 @@ def _qc(g: IntegrationGroup, frames: list[Frame], coverage: np.ndarray) -> dict:
         "drizzle_suitable": len(frames) >= 20 and subpix_spread > 0.2 and dither_spread > 1.0,
         "common_area_fraction": round(float((coverage >= len(frames)).mean()), 4),
         "rejected_pixel_fraction": {"median": float(np.median(rej)), "max": float(np.max(rej))} if rej else None,
-        "suspicious_frames": [f.name for f in frames
+        "suspicious_frames": [label for f, label in zip(frames, _frame_labels(frames))
                               if rej and f.rejected_pixel_fraction and f.rejected_pixel_fraction > max(0.01, 5 * float(np.median(rej)))],
     }
 
@@ -823,14 +840,14 @@ def _suspicious_causes(frames: list[Frame], maps: list, names: set[str]) -> dict
     """剔除像素特別多的片是什麼原因：cloud（星點明顯變暗）、sky（大片被剔除：背景梯度或天光變化，例如天亮、月光）、
     trail（只有細線或零星：衛星、飛機，已經剔除）；沒有剔除遮罩時是 unknown。"""
     causes: dict[str, str] = {}
-    for f, path in zip(frames, maps):
-        if f.name not in names:
+    for f, path, label in zip(frames, maps, _frame_labels(frames)):
+        if label not in names:
             continue
         if f.norm and f.norm["scale"][0] > CLOUD_SCALE:
-            causes[f.name] = "cloud"
+            causes[label] = "cloud"
             continue
         if not path:
-            causes[f.name] = "unknown"
+            causes[label] = "unknown"
             continue
         m = np.asarray(np.load(path, mmap_mode="r")[::2, ::2])
         h, w = (m.shape[0] // 8) * 8, (m.shape[1] // 8) * 8
@@ -838,7 +855,7 @@ def _suspicious_causes(frames: list[Frame], maps: list, names: set[str]) -> dict
         rej = ((m == LOW) | (m == HIGH)).sum(axis=(1, 3))
         valid = (m != OUT_OF_BOUNDS).sum(axis=(1, 3))
         frac = np.where(valid > 0, rej / np.maximum(valid, 1), 0.0)
-        causes[f.name] = "sky" if (frac > WIDE_TILE).mean() >= WIDE_AREA else "trail"
+        causes[label] = "sky" if (frac > WIDE_TILE).mean() >= WIDE_AREA else "trail"
     return causes
 
 
@@ -916,6 +933,7 @@ def _write_recipe(output_dir: Path, project: Project, outputs: list[GroupResult]
                                 "frames": len(v["frames"])} for k, v in project.calib_groups.items()],
         "align_groups": [{"id": ag.id, "trains": ag.trains,
                           "reference_frame": ag.reference.name if ag.reference else None,
+                          "reference_path": str(ag.reference.path) if ag.reference else None,
                           "output": {k: getattr(s.for_align(ag.id), k) for k in ALIGN_OUTPUT_KEYS},
                           "crop": next((o.qc.get("crop") for o in outputs if o.align == ag.id), None)}
                          for ag in project.align_groups],

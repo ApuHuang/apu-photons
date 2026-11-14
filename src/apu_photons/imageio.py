@@ -128,11 +128,14 @@ def cfa_masks(pattern: str, shape: tuple[int, int]) -> dict[str, np.ndarray]:
 
 
 def write_fits(path: Path, data: np.ndarray, header: fits.Header | None = None, bits: int = 32) -> None:
-    """輸出 FITS。RGB 為 (3, H, W)。bits=16 時線性縮到 0~65535。"""
+    """輸出 FITS。RGB 為 (3, H, W)。bits=16 時線性縮到 0~65535，原本的範圍記在 LINMIN／LINMAX：
+    線性值 = LINMIN + 像素值 × (LINMAX − LINMIN) / 65535，後製才還原得出校正後的數值。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     hdr = header.copy() if header is not None else fits.Header()
-    out = np.nan_to_num(data, nan=0.0).astype(np.float32)
+    out = np.nan_to_num(data, nan=0.0).astype(np.float32, copy=False)  # nan_to_num 已經是新的陣列，不用再複製一份
     if bits == 16:
         lo, hi = float(out.min()), float(out.max())
         out = ((out - lo) / (hi - lo or 1.0) * 65535.0).round().astype(np.uint16)
+        hdr["LINMIN"] = (lo, "linear value stored as 0")
+        hdr["LINMAX"] = (hi, "linear value stored as 65535")
     fits.PrimaryHDU(out, header=hdr).writeto(path, overwrite=True)
