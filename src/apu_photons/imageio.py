@@ -13,12 +13,13 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
+from . import cfa
+from .cfa import BAYER_PATTERNS  # noqa: F401  （舊的匯入位置）
 from .i18n import Msg
 
 FITS_SUFFIXES = {".fit", ".fits", ".fts"}
 RAW_SUFFIXES = {".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".pef", ".dng", ".srw"}
 IMAGE_SUFFIXES = FITS_SUFFIXES | RAW_SUFFIXES
-BAYER_PATTERNS = {"RGGB", "BGGR", "GRBG", "GBRG"}
 TOP_DOWN, BOTTOM_UP = "TOP-DOWN", "BOTTOM-UP"
 
 
@@ -68,13 +69,18 @@ def _load_raw(path: Path) -> tuple[np.ndarray, fits.Header]:
         data = raw.raw_image_visible.astype(np.float32)
         black = np.asarray(raw.black_level_per_channel, dtype=np.float32)
         pattern = raw.raw_pattern
-        if data.ndim != 2 or pattern is None or pattern.shape != (2, 2):
-            # X-Trans 與已解馬賽克的 DNG：MVP 不支援
+        if data.ndim != 2 or pattern is None or pattern.shape not in ((2, 2), (6, 6)):
+            # 已解馬賽克的 DNG 與其他排列不支援；2×2 是 Bayer、6×6 是富士 X-Trans
             raise ValueError(Msg("msg.raw_bayer_only", name=path.name))
         data -= black[raw.raw_colors_visible]
         desc = raw.color_desc.decode()
         header["BAYERPAT"] = "".join(desc[c] for c in pattern.flatten())
         header["SATLEVEL"] = float(raw.white_level) - float(black.max())
+        wb = [float(v) for v in (getattr(raw, "camera_whitebalance", None) or [])][:3]
+        if len(wb) == 3 and min(wb) > 0:
+            # 相機的白平衡（相對綠）：只給 X-Trans 解馬賽克用（debayer.xtrans_colordiff），輸出仍是原始色彩
+            header["WBGAINR"] = (round(wb[0] / wb[1], 5), "camera white balance R/G (demosaic only)")
+            header["WBGAINB"] = (round(wb[2] / wb[1], 5), "camera white balance B/G (demosaic only)")
         other = getattr(raw, "other", None)
         if other is not None:
             if other.shutter_speed:
@@ -105,26 +111,21 @@ def row_order(header) -> str:
 
 
 def bayer_pattern(header: fits.Header) -> str | None:
-    """header 裡的 Bayer 排列，已依 XBAYROFF / YBAYROFF 位移；單色回傳 None。"""
+    """header 裡的 CFA 排列（Bayer 4 個字、X-Trans 36 個字），已依 XBAYROFF / YBAYROFF 位移；單色回傳 None。"""
     pat = str(header.get("BAYERPAT", "")).strip().upper()
-    if pat not in BAYER_PATTERNS:
+    if not cfa.is_valid(pat):
         return None
-    dx = int(header.get("XBAYROFF", 0)) % 2
-    dy = int(header.get("YBAYROFF", 0)) % 2
+    p = cfa.period(pat)
+    dx = int(header.get("XBAYROFF", 0)) % p
+    dy = int(header.get("YBAYROFF", 0)) % p
     if dx or dy:
-        grid = [[pat[0], pat[1]], [pat[2], pat[3]]]
-        pat = "".join(grid[(r + dy) % 2][(c + dx) % 2] for r in range(2) for c in range(2))
+        pat = cfa.shift(pat, dx, dy)
     return pat
 
 
 def cfa_masks(pattern: str, shape: tuple[int, int]) -> dict[str, np.ndarray]:
-    """每個顏色在整張影像上的布林遮罩；G 兩格合在一起。"""
-    h, w = shape
-    yy, xx = np.indices((h, w))
-    masks = {c: np.zeros((h, w), dtype=bool) for c in "RGB"}
-    for i, color in enumerate(pattern):
-        masks[color] |= ((yy % 2) == i // 2) & ((xx % 2) == i % 2)
-    return masks
+    """每個顏色在整張影像上的布林遮罩（同色的各格合在一起）。"""
+    return cfa.masks(pattern, shape)
 
 
 def write_fits(path: Path, data: np.ndarray, header: fits.Header | None = None, bits: int = 32) -> None:

@@ -16,6 +16,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.ndimage import map_coordinates
 
+from . import cfa
+
 TILE = 128            # 背景格子邊長（單色是像素；CFA 是每個色版平面的像素，等於原始的 256 像素）
 DEGREE = 3            # 多項式階數（Seestar 沒有 flat、天亮前的片：2 階剔除 7～8%，3 階 1～2%；4 階以上沒有更好）
 SAMPLES = (24, 36)    # 參考座標上取樣的格點數（列, 行）
@@ -47,6 +49,8 @@ def background_grid(data: np.ndarray, bayer: str | None) -> dict:
     if not bayer:
         bg, cy, cx = _tile_background(data, TILE)
         return {"y": cy, "x": cx, "v": bg[None]}
+    if cfa.is_xtrans(bayer):
+        return _background_grid_xtrans(data, bayer)
     planes: dict[str, list] = {"R": [], "G": [], "B": []}
     for i, color in enumerate(bayer):
         dy, dx = i // 2, i % 2
@@ -55,6 +59,22 @@ def background_grid(data: np.ndarray, bayer: str | None) -> dict:
     _, cy, cx = planes["R"][0]
     # 色版平面的像素 i 在原始座標約是 2i+0.5（2×2 格的中心）
     return {"y": cy * 2 + 0.5, "x": cx * 2 + 0.5, "v": v}
+
+
+def _background_grid_xtrans(data: np.ndarray, pattern: str) -> dict:
+    """X-Trans：每個 6×6 位置是一個平面（1/6 解析度），格子邊長換算成與 Bayer 差不多的原始像素數；
+    同色的各位置取平均。先切成 6 的倍數，各平面的格子才一樣大。"""
+    p = cfa.period(pattern)
+    h, w = data.shape
+    arr = data[: h - h % p, : w - w % p]
+    tile = max(8, round(TILE * 2 / p))
+    planes: dict[str, list] = {"R": [], "G": [], "B": []}
+    for dy, dx in cfa.phases(pattern):
+        planes[pattern[dy * p + dx]].append(_tile_background(arr[dy::p, dx::p], tile))
+    v = np.stack([np.mean([q[0] for q in planes[c]], axis=0) for c in "RGB"])
+    _, cy, cx = planes["R"][0]
+    # 平面的像素 i 在原始座標約是 p·i + (p−1)/2（p×p 格的中心）
+    return {"y": cy * p + (p - 1) / 2, "x": cx * p + (p - 1) / 2, "v": v}
 
 
 def _sample(grid: dict, xy: np.ndarray, shape: tuple[int, int]) -> np.ndarray:

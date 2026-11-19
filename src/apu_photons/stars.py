@@ -1,6 +1,7 @@
 """Stage 3 前半：在亮度代理圖上偵測星點並量 FWHM / SNR。
 
-CFA 用 2×2 super-pixel 當亮度代理（只拿來找星，不當輸出），座標換回原始像素。
+CFA 用 super-pixel 當亮度代理（只拿來找星，不當輸出），座標換回原始像素：
+Bayer 2×2；X-Trans 3×3（6×6 切成的四個 3×3 都是 2 紅 5 綠 2 藍，合併後各處的顏色比例相同）。
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from astropy.stats import sigma_clipped_stats
 from photutils.background import Background2D, MedianBackground
 from photutils.detection import DAOStarFinder
 
+from . import cfa
 from .model import Stars
 
 DETECT_SIGMA = 5.0
@@ -19,11 +21,11 @@ SHAPE_STARS = 60
 CUTOUT = 12
 
 
-def superpixel(data: np.ndarray) -> np.ndarray:
+def superpixel(data: np.ndarray, k: int = 2) -> np.ndarray:
     h, w = data.shape
-    h -= h % 2
-    w -= w % 2
-    return data[:h, :w].reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+    h -= h % k
+    w -= w % k
+    return data[:h, :w].reshape(h // k, k, w // k, k).mean(axis=(1, 3))
 
 
 def _moment_fwhm(img: np.ndarray, x: float, y: float) -> float | None:
@@ -70,8 +72,10 @@ def _finder(noise: float) -> DAOStarFinder:
 
 
 def detect(data: np.ndarray, bayer: str | None) -> Stars:
-    img = superpixel(data) if bayer else data
-    scale = 2.0 if bayer else 1.0
+    k = cfa.bin_factor(bayer)
+    oy, ox = cfa.bin_origin(bayer)  # X-Trans：從每個 3×3 都是 2 紅 5 綠 2 藍的位置開始合併
+    img = superpixel(data[oy:, ox:], k) if bayer else data
+    scale = float(k)
     box = max(16, min(img.shape) // 16)
     try:
         bkg = Background2D(img, box, filter_size=3, bkg_estimator=MedianBackground())
@@ -92,6 +96,10 @@ def detect(data: np.ndarray, bayer: str | None) -> Stars:
     peak = np.asarray(tbl["peak"], float)
     fw = [f for f in (_moment_fwhm(sub, xi, yi) for xi, yi in zip(x[:SHAPE_STARS], y[:SHAPE_STARS])) if f]
     fwhm = float(np.median(fw)) * scale if fw else float("nan")
+    if cfa.is_xtrans(bayer) and fw:
+        # k×k 平均讓星點每軸多了 (k²−1)/12 像素² 的變異數；3×3 時 FWHM 3 會量成約 3.6，扣回去。
+        # Bayer 的 2×2 也有（較小的）同樣偏差，但照舊不扣，既有的 FWHM 與權重才不會變
+        fwhm = float(np.sqrt(max(fwhm ** 2 - 2.3548 ** 2 * (k * k - 1) / 12.0, 0.25 * fwhm ** 2)))
     snr = float(np.median(peak[:SHAPE_STARS]) / noise)
-    # super-pixel (i, j) 的中心在原始像素 2i+0.5
-    return Stars(x * scale + (scale - 1) / 2, y * scale + (scale - 1) / 2, flux, fwhm, bg_level, noise, snr)
+    # super-pixel (i, j) 的中心在原始像素 k·i + (k−1)/2（再加上合併的起點）
+    return Stars(x * scale + (scale - 1) / 2 + ox, y * scale + (scale - 1) / 2 + oy, flux, fwhm, bg_level, noise, snr)

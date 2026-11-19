@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import cfa
 from .calibration import Masters, calibrate
 from .i18n import Msg, get_language, set_language
 from .imageio import load_image
@@ -26,6 +27,10 @@ def channel_locations(data: np.ndarray, bayer: str | None) -> list[float]:
     """每個輸出通道的背景位置（中位數，先剔除 5σ 以上的星點與軌跡）。Stage 4 正規化用。"""
     if not bayer:
         return [_robust_loc(np.asarray(data[::3, ::3]))]
+    if cfa.is_xtrans(bayer):
+        arr = np.asarray(data)
+        return [_robust_loc(np.concatenate([arr[dy::6, dx::6].ravel() for dy, dx in cfa.phases(bayer, c)])[::7])
+                for c in "RGB"]
     h, w = data.shape
     arr = np.asarray(data[: h - h % 2, : w - w % 2])
     return [_robust_loc(_color_samples(arr, bayer, c)[::7]) for c in "RGB"]

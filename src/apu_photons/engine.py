@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from . import __version__, backend, localnorm
+from . import __version__, backend, cfa, localnorm
 from . import drizzle as drizzle_mod
 from . import integrate as integrate_mod
 from .backend import default_workers
@@ -314,7 +314,7 @@ def _run(inputs, output_dir: Path, s: Settings, cache: Path, log: _Log, warnings
 def _log_plan(project: Project, log) -> None:
     for tid, t in project.trains.items():
         scale = f"{t.pixel_scale_arcsec:.2f}″/px" if t.pixel_scale_arcsec else Msg("msg.unknown")
-        kind = f"OSC {t.bayer}" if t.bayer else Msg("msg.mono")
+        kind = f"OSC {cfa.label(t.bayer)}" if t.bayer else Msg("msg.mono")
         w, h = (t.shape[1], t.shape[0]) if t.shape else ("?", "?")
         log(Msg("msg.train", id=tid, kind=kind, w=w, h=h, scale=scale))
     for ag in project.align_groups:
@@ -575,8 +575,20 @@ def _scale_of(t: np.ndarray | None) -> float:
 def _jobs(frames: list[Frame]) -> list[FrameJob]:
     return [FrameJob(str(f.calibrated_path), f.transform, list(f.norm["scale"]), list(f.norm["offset"]), float(f.weight),
                      f.bayer, f.norm.get("local"), f.distortion,
-                     # 找星用的亮度圖在彩色相機是 2×2 平均，雜訊約是單一像素的一半
-                     float(f.stars.noise) * (2.0 if f.bayer else 1.0)) for f in frames]
+                     # 找星用的亮度圖在彩色相機是 k×k 平均（Bayer 2、X-Trans 3），雜訊約是單一像素的 1/k
+                     float(f.stars.noise) * float(cfa.bin_factor(f.bayer)), _wb(f)) for f in frames]
+
+
+def _wb(f: Frame) -> tuple[float, float] | None:
+    """X-Trans 解馬賽克用的白平衡（RAW 讀到的相機白平衡）；沒有或不是 X-Trans 時 None。"""
+    if not cfa.is_xtrans(f.bayer):
+        return None
+    r, b = f.header.get("WBGAINR"), f.header.get("WBGAINB")
+    try:
+        r, b = float(r), float(b)
+    except (TypeError, ValueError):
+        return None
+    return (r, b) if r > 0 and b > 0 else None
 
 
 def _integrate(frames, bayer, shape, s: Settings, gdir: Path, be, workers: int, log, progress=None):
@@ -729,7 +741,7 @@ def _write_group(ag: AlignGroup, g: IntegrationGroup, it: dict, s: Settings, cro
     log(Msg("msg.output", path=output, w=master.shape[-1], h=master.shape[-2]))
     channels = {}
     if s.dual_band and bayer and master.ndim == 3 and is_dual_band(g.filter, ag.reference.header.get("INSTRUME")):
-        channels = _write_dual_band(master, hdr, output, s, log)
+        channels = _write_dual_band(master, hdr, output, s, log, bayer)
         qc["advice"].append(Msg("msg.advice.dual_band", group=label, files=_names([p.name for p in channels.values()])))
     cov_out = output.with_name(output.stem + "_coverage" + output.suffix)
     chdr = fits.Header()
@@ -755,11 +767,14 @@ def is_dual_band(filter_name: str | None, instrument=None) -> bool:
     return bool(_DUAL_BAND.search(name))
 
 
-def _write_dual_band(master: np.ndarray, hdr: fits.Header, output: Path, s: Settings, log) -> dict[str, Path]:
-    """雙窄帶濾鏡：Ha 取紅色版；OIII 取綠與藍，依 Bayer 上的像素數 2:1 加權（同 Siril 的 Ha／OIII 擷取）。
-    各存一個單色 master，與彩色 master 像素對齊，可直接在 APU Processing 做 HOO 合成。"""
+def _write_dual_band(master: np.ndarray, hdr: fits.Header, output: Path, s: Settings, log,
+                     bayer: str | None = None) -> dict[str, Path]:
+    """雙窄帶濾鏡：Ha 取紅色版；OIII 取綠與藍，依感光元件上的像素數加權（Bayer 2:1，同 Siril 的 Ha／OIII 擷取；
+    X-Trans 20:8）。各存一個單色 master，與彩色 master 像素對齊，可直接在 APU Processing 做 HOO 合成。"""
     out = {}
-    for name, data in (("Ha", master[0]), ("OIII", (2.0 * master[1] + master[2]) / 3.0)):
+    n = cfa.color_counts(bayer) if bayer else {"G": 2, "B": 1}
+    oiii = (float(n["G"]) * master[1] + float(n["B"]) * master[2]) / float(n["G"] + n["B"])
+    for name, data in (("Ha", master[0]), ("OIII", oiii)):
         h = hdr.copy()
         h["FILTER"] = name
         h.remove("COLORTYP", ignore_missing=True)

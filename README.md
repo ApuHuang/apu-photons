@@ -54,14 +54,14 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 
 | Stage | 內容 |
 |---|---|
-| 0 Ingest | FITS 與相機 RAW（2×2 Bayer）；輸入是檔案，類型依 `IMAGETYP`、檔名、資料夾名稱判斷；已經疊好的成品（Seestar 的 `Stacked_*.fit` 等）自動跳過；分光學系統（相機＋焦距）、濾鏡（大小寫與空白自動歸併）、觀測夜；讀 APU Pick sidecar |
+| 0 Ingest | FITS 與相機 RAW（2×2 Bayer、富士 6×6 X-Trans）；輸入是檔案，類型依 `IMAGETYP`、檔名、資料夾名稱判斷；已經疊好的成品（Seestar 的 `Stacked_*.fit` 等）自動跳過；分光學系統（相機＋焦距）、濾鏡（大小寫與空白自動歸併）、觀測夜；讀 APU Pick sidecar |
 | 1 Master | 校正檔依條件分套，自動配對：dark（相機、增益、offset、曝光、溫度 ±2°C）、bias、flat（濾鏡、同一晚）、flat-dark；做好的 master 直接用；winsorized sigma clip 整合（GPU 或多行程），快取 |
 | 2 校正 | 在 CFA 原始資料上校正；flat 各色分別正規化；熱像素（master dark 的局部偵測 + 單張集中度偵測）與冷像素修正 |
 | 3 對齊 | 星點偵測（CFA 用 super-pixel）、三角形配對 + RANSAC 相似變換、中天翻轉；可選畸變修正（相似變換之外再加低階多項式）；每個對齊組一張參考 frame，組內各濾鏡都對齊到它；縮放不合理或與參考重疊太少的判為對齊失敗 |
 | 4 正規化 | 整合組內，以配對星點的亮度比當 scale、背景中位數當 offset；可選「局部正規化」：offset 改成平滑的面，各張的光害梯度對齊到參考 frame |
 | 5 權重 | SNR² / FWHM²（SNR 以正規化後的雜訊計）；APU Pick 的 reject 當篩選；權重算不出來的 frame 排除 |
 | 6 整合 | 每個整合組（光學系統 × 濾鏡）各自整合；分段（band）串流，不一次載入全部；winsorized / sigma / average / median；內插限幅（亮星旁不出現暗環）；保存每張的剔除遮罩；沒有有效像素的組不輸出 |
-| 7 Drizzle | 1× / 2×（對齊組統一）；OSC 用 CFA drizzle（不解馬賽克、各色像素直接投進 R/G/B 網格）；沿用 Stage 4~6 的正規化、權重、剔除遮罩；輸出權重圖、零星空洞自動補；張數或 dither 不足只提醒 |
+| 7 Drizzle | 1× / 2×（對齊組統一）；OSC 用 CFA drizzle（不解馬賽克、各色像素直接投進 R/G/B 網格；X-Trans 也適用）；沿用 Stage 4~6 的正規化、權重、剔除遮罩；輸出權重圖、零星空洞自動補；張數或 dither 不足只提醒 |
 | 8 輸出 | 每組一個 master（`<目標>_<濾鏡>.fits`）與覆蓋率圖；彩色相機＋雙窄帶濾鏡（Seestar 的 LP、L-eXtreme 等）另存 Ha、OIII 兩個單色 master；對齊組共用裁切範圍（預設至少 90% 的 frame 覆蓋）；Downsample 0.5×、32-bit / 16-bit FITS、專案一份 `recipe.json` 與 log |
 | QC | 剔除原因統計、FWHM 分布、dither 分析與 drizzle 適用性、剔除像素特別多的 frame 分原因給建議（天光變化或梯度、雲、衛星與飛機）、沒用到的校正檔與原因 |
 

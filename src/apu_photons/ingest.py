@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import cfa
 from .i18n import Msg
 from .imageio import bayer_pattern, file_sha256, is_image, list_images, read_header, row_order
 from .integrations.pick import load_pick_sidecar
@@ -20,6 +21,7 @@ from .model import UNKNOWN, AlignGroup, CalibrationSet, Frame, IntegrationGroup,
 HEADER_KEYS = ("IMAGETYP", "EXPTIME", "EXPOSURE", "GAIN", "OFFSET", "CCD-TEMP", "XBINNING", "YBINNING", "BAYERPAT",
                "XBAYROFF", "YBAYROFF", "DATE-OBS", "FILTER", "INSTRUME", "TELESCOP", "FOCALLEN", "XPIXSZ",
                "PIERSIDE", "SITELONG", "NAXIS1", "NAXIS2", "SATLEVEL", "ISO", "ROWORDER", "OBJECT", "LENS",
+               "WBGAINR", "WBGAINB",
                "NAXIS", "STACKCNT", "NCOMBINE")
 
 CAL_KINDS = ("dark", "bias", "flat", "flat_dark")
@@ -215,7 +217,7 @@ def _camera(f: Frame) -> tuple[str, str]:
     binning = int(_float(h.get("XBINNING")) or 1)
     shape = f.shape or (0, 0)
     key = f"{inst}|{px}|{shape[1]}x{shape[0]}|{f.bayer}|bin{binning}"
-    name = inst or f"{shape[1]}×{shape[0]}{' ' + f.bayer if f.bayer else ''}"
+    name = inst or f"{shape[1]}×{shape[0]}{' ' + cfa.label(f.bayer) if f.bayer else ''}"
     if binning > 1:
         name += f" bin{binning}"
     return key, name

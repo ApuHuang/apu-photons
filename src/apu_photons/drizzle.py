@@ -1,6 +1,6 @@
 """Stage 7：Drizzle（SPEC §3 Stage 7）。
 
-- OSC 用 CFA (Bayer) drizzle：不解馬賽克，每個 CFA 像素依自己的顏色投進 R / G / B 輸出網格。
+- OSC 用 CFA drizzle（Bayer 與 X-Trans）：不解馬賽克，每個 CFA 像素依自己的顏色投進 R / G / B 輸出網格。
 - 單色就是一般的 drizzle。
 - 沿用 Stage 4 的正規化、Stage 5 的權重、Stage 6 的剔除遮罩（參考座標）；本身不做 rejection。
 - drop 以「軸對齊正方形」近似：面積正確，旋轉角小（或 180° 中天翻轉）時與真正的旋轉正方形一致。
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import cfa
 from .backend import CPU, Backend
 from .cache import require_space
 from .combine import HIGH, LOW
@@ -45,12 +46,10 @@ class DrizzleSpec:
 
 
 def _chan_lut(bayer: str | None) -> np.ndarray:
-    """(2, 2) 查表：CFA 位置 → 通道（R=0, G=1, B=2）。"""
-    lut = np.zeros((2, 2), np.int64)
+    """(p, p) 查表：CFA 位置 → 通道（R=0, G=1, B=2）。Bayer 是 2×2、X-Trans 6×6；單色是全 0 的 2×2。"""
     if bayer:
-        for i, color in enumerate(bayer):
-            lut[i // 2, i % 2] = "RGB".index(color)
-    return lut
+        return cfa.color_index(bayer).copy()
+    return np.zeros((2, 2), np.int64)
 
 
 def _input_bounds(t: np.ndarray, q0: int, q1: int, spec: DrizzleSpec, hw: float, in_shape: tuple[int, int],
@@ -99,7 +98,8 @@ def drizzle_strip(be: Backend, jobs: list[FrameJob], cals, rmaps, spec: DrizzleS
         v = xp.asarray(np.array(cal[y0:y1, x0:x1], np.float32))
         yy = xp.arange(y0, y1, dtype=xp.float32)[:, None]
         xx = xp.arange(x0, x1, dtype=xp.float32)[None, :]
-        ch = lut[(xp.arange(y0, y1) % 2)[:, None], (xp.arange(x0, x1) % 2)[None, :]]
+        p = lut.shape[0]
+        ch = lut[(xp.arange(y0, y1) % p)[:, None], (xp.arange(x0, x1) % p)[None, :]]
         xr = t[0, 0] * xx + t[0, 1] * yy + t[0, 2]
         yr = t[1, 0] * xx + t[1, 1] * yy + t[1, 2]
         if job.distortion:  # 畸變修正：每個輸入像素落到參考座標的位置再加多項式修正

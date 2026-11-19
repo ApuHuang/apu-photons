@@ -11,6 +11,8 @@ H, W = 256, 320
 BG = 500.0
 READ_NOISE = 8.0
 PEDESTAL = 300.0  # dark 的偏壓 + 暗電流，dark frame 同值
+# 富士 X-Trans（X-E5 實拍 RAF 讀出的排列，與 PixInsight 紀錄的相同）
+XTRANS = "GGRGGBGGBGGRBRGRBGGGBGGRGGRGGBRBGBRG"
 
 
 def star_catalog(n=120, seed=1):
@@ -49,10 +51,11 @@ def render(tx=0.0, ty=0.0, rot_deg=0.0, fwhm=3.0, seed=0, catalog=None, vignette
             px, py = int(10 + t * (W - 20)), int(30 + t * (H - 60))
             img[py, px] += 3000
     if bayer:
-        # 各色響應不同，模擬 OSC
+        # 各色響應不同，模擬 OSC（Bayer 或 X-Trans）
+        from apu_photons import cfa
         resp = {"R": 0.8, "G": 1.0, "B": 0.6}
-        for i, c in enumerate(bayer):
-            img[i // 2::2, i % 2::2] *= resp[c]
+        for c, m in cfa.masks(bayer, img.shape).items():
+            img[m] *= resp[c]
     if vignette is not None:
         img *= vignette
     img = rng.poisson(np.clip(img, 0, None)).astype(np.float64) + rng.normal(PEDESTAL, READ_NOISE, img.shape)

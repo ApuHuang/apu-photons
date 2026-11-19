@@ -13,9 +13,10 @@ from pathlib import Path
 
 import numpy as np
 
+from . import cfa
 from .backend import CPU, Backend
 from .combine import HIGH, LOW, OUT_OF_BOUNDS, clip_combine
-from .debayer import bilinear
+from .debayer import demosaic
 from .i18n import Msg
 from .localnorm import eval_offset
 
@@ -34,6 +35,7 @@ class FrameJob:
     local: list | None = None         # local normalization：每通道一組多項式係數（參考座標），取代 offset
     distortion: dict | None = None    # 畸變修正（register.fit_distortion）；None = 只有 transform
     noise: float = 0.0                # 這張每個像素的背景雜訊（校正後的單位）；內插限幅的門檻用，0 = 從資料估
+    wb: tuple | None = None           # X-Trans 解馬賽克用的白平衡（紅、藍相對綠）；None = 不調整
 
     @property
     def margin(self) -> int:
@@ -62,7 +64,8 @@ class BandSpec:
     clamp: bool = True                # 內插結果不低於來源鄰近像素的最小值（去掉亮星旁的暗環）
 
 
-def _patch_bounds(inv: np.ndarray, r0: int, r1: int, width: int, shape: tuple[int, int], margin: int = 0):
+def _patch_bounds(inv: np.ndarray, r0: int, r1: int, width: int, shape: tuple[int, int], margin: int = 0,
+                  period: int = 2):
     corners = np.array([[0, r0, 1], [width - 1, r0, 1], [0, r1 - 1, 1], [width - 1, r1 - 1, 1]], float)
     src = corners @ inv.T
     h, w = shape
@@ -71,14 +74,15 @@ def _patch_bounds(inv: np.ndarray, r0: int, r1: int, width: int, shape: tuple[in
     x1 = int(np.ceil(src[:, 0].max())) + margin + 1
     y0 = int(np.floor(src[:, 1].min())) - margin
     y1 = int(np.ceil(src[:, 1].max())) + margin + 1
-    x0, y0 = max(0, x0 - x0 % 2), max(0, y0 - y0 % 2)  # 對齊 Bayer 格
+    x0, y0 = max(0, x0 - x0 % period), max(0, y0 - y0 % period)  # 對齊 CFA 的週期（Bayer 2、X-Trans 6）
     return x0, y0, min(w, x1), min(h, y1)
 
 
-def read_patch(job: FrameJob, cal: np.ndarray, r0: int, r1: int, width: int):
-    """從校正後的 memmap 讀出這段需要的區域；不在影像內就回傳 None。"""
+def read_patch(job: FrameJob, cal: np.ndarray, r0: int, r1: int, width: int, pattern: str | None = None):
+    """從校正後的 memmap 讀出這段需要的區域；不在影像內就回傳 None。pattern：輸出的 CFA 排列（這張沒有自己的排列時用）。"""
     inv = np.linalg.inv(job.transform)
-    x0, y0, x1, y1 = _patch_bounds(inv, r0, r1, width, cal.shape, job.margin)
+    period = max(2, cfa.period(job.pattern(pattern)))
+    x0, y0, x1, y1 = _patch_bounds(inv, r0, r1, width, cal.shape, job.margin, period)
     if x1 - x0 < 4 or y1 - y0 < 4:
         return None
     return np.array(cal[y0:y1, x0:x1], np.float32), x0, y0
@@ -129,7 +133,7 @@ def warp_band(be: Backend, job: FrameJob, patch, bayer: str | None, r0: int, r1:
         return xp.full((nch, rows, width), xp.nan, xp.float32)
     data, x0, y0 = patch
     data = xp.asarray(data)
-    chans = bilinear(data, bayer, xp, ndi) if bayer else data[None]
+    chans = demosaic(data, bayer, xp, ndi, job.wb) if bayer else data[None]
     a = np.linalg.inv(job.transform)
     matrix = xp.asarray([[a[1, 1], a[1, 0]], [a[0, 1], a[0, 0]]])
     off = (a[1, 1] * r0 + a[1, 2] - y0, a[0, 1] * r0 + a[0, 2] - x0)
@@ -203,7 +207,8 @@ def _cpu_band(band: tuple[int, int]):
     r0, r1 = band
     jobs, spec = _W["jobs"], _W["spec"]
     w = spec.shape[1]
-    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w), j.pattern(spec.bayer), r0, r1, w, spec.shape,
+    stack = np.stack([warp_band(CPU, j, read_patch(j, c, r0, r1, w, spec.bayer), j.pattern(spec.bayer), r0, r1, w,
+                                spec.shape,
                                 spec.clamp)
                       for j, c in zip(jobs, _W["cals"])])
     master, codes = combine_band(CPU, stack, _W["weights"], spec)
@@ -233,7 +238,7 @@ def integrate(be: Backend, jobs: list[FrameJob], spec: BandSpec, workers: int, m
         bands = [(r0, min(h, r0 + band)) for r0 in range(0, h, band)]
         with ThreadPoolExecutor(max_workers=max(2, workers)) as io:
             def fetch(b):
-                return [io.submit(read_patch, j, c, b[0], b[1], w) for j, c in zip(jobs, cals)]
+                return [io.submit(read_patch, j, c, b[0], b[1], w, spec.bayer) for j, c in zip(jobs, cals)]
             pending = fetch(bands[0])
             for k, (r0, r1) in enumerate(bands):
                 patches = [f.result() for f in pending]

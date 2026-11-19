@@ -14,6 +14,7 @@ import numpy as np
 from astropy.io import fits
 from scipy.ndimage import median_filter, uniform_filter
 
+from . import cfa
 from .backend import CPU, Backend
 from .cache import require_space, tmp_dir
 from .combine import clip_combine
@@ -176,6 +177,8 @@ def hot_from_dark(dark: np.ndarray, bayer: str | None, be: Backend = CPU) -> np.
 
     用局部中位數而不是整張的中位數：amp glow 那一側整片偏亮，但 dark 扣掉就沒了，不是壞像素
     （整張門檻在 QHY183M 上會把右側 17% 的像素標成壞像素）。中位數濾波有 GPU 時在顯示卡上做（結果相同）。"""
+    if cfa.is_xtrans(bayer):
+        return _hot_from_dark_xtrans(dark, bayer)
     bad = np.zeros(dark.shape, bool)
     for sy, sx in _plane_views(dark.shape, bayer):
         plane = dark[sy, sx]
@@ -280,8 +283,59 @@ def median3(plane: np.ndarray) -> np.ndarray:
     return p[4].astype(plane.dtype, copy=False)
 
 
+def _xtrans_neighbors(data: np.ndarray, pattern: str):
+    """X-Trans 每個 6×6 位置一個平面（`data[dy::6, dx::6]`），配上它在 5×5 內同色鄰點的平面。
+
+    不能像 Bayer 那樣在平面上取 3×3：同一位置的平面相隔 6 像素，太遠，星點核心會被當成熱像素。
+    依序產生 ((dy, dx), 平面, 鄰點 (K, ny, nx))。"""
+    p = cfa.period(pattern)
+    padded = cfa.pad_periodic(np.asarray(data, np.float32), p)
+    for (py, px), offs in cfa.same_color_offsets(pattern, 2).items():
+        plane = data[py::p, px::p]
+        ny, nx = plane.shape
+        nb = np.stack([padded[p + py + dy::p, p + px + dx::p][:ny, :nx] for dy, dx in offs])
+        yield (py, px), plane, nb
+
+
+def _hot_from_dark_xtrans(dark: np.ndarray, pattern: str) -> np.ndarray:
+    """X-Trans 版的 `hot_from_dark`：比 5×5 內同色鄰點的中位數高出 5σ（σ 每個位置各自算）。"""
+    bad = np.zeros(dark.shape, bool)
+    p = cfa.period(pattern)
+    for (py, px), plane, nb in _xtrans_neighbors(dark, pattern):
+        resid = plane - np.median(nb, axis=0)
+        sig = _mad_sigma(resid[::3, ::3])
+        bad[py::p, px::p] = resid > HOT_SIGMA * max(sig, 1e-6)
+    return bad
+
+
+def _cosmetic_xtrans(data: np.ndarray, pattern: str, bad: np.ndarray | None) -> tuple[np.ndarray, int]:
+    """X-Trans 版的 `cosmetic`：鄰點換成 5×5 內的同色像素，其餘判斷相同。
+    鄰點都從修正前的資料取，結果與處理順序無關。"""
+    out = data
+    fixed = 0
+    p = cfa.period(pattern)
+    for (py, px), plane, nb in _xtrans_neighbors(data.copy(), pattern):
+        med = np.median(nb, axis=0)
+        diff = plane - med
+        sig = _mad_sigma(diff[::2, ::2])
+        level = np.median(med)
+        here = np.clip(plane - level, 0, None)
+        box = here + np.clip(nb - level, 0, None).sum(axis=0)
+        with np.errstate(all="ignore"):
+            conc = here / box
+        hot = (diff > HOT_SIGMA * max(sig, 1e-6)) & (conc > HOT_CONCENTRATION)
+        if bad is not None:
+            hot |= bad[py::p, px::p]
+        view = out[py::p, px::p]
+        view[hot] = med[hot]
+        fixed += int(hot.sum())
+    return out, fixed
+
+
 def cosmetic(data: np.ndarray, bayer: str | None, bad: np.ndarray | None) -> tuple[np.ndarray, int]:
     """把 master 標出的壞像素與單張偵測到的熱像素，換成同色鄰近像素的中位數。"""
+    if cfa.is_xtrans(bayer):
+        return _cosmetic_xtrans(data, bayer, bad)
     out = data
     fixed = 0
     for sy, sx in _plane_views(data.shape, bayer):
