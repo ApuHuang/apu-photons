@@ -5,9 +5,8 @@ Astrophotography Photons Utility：天文攝影的校正、對齊、疊圖。免
 工作流：**[APU Pick](https://github.com/ApuHuang/apu-pick)**（挑片）→ **APU Photons**（疊圖）→
 **[APU Processing](https://github.com/ApuHuang/apu-processing)**（後製），同屬 APU Astro 系列。
 
-目前版本 **0.3.0**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
-彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。0.3 新增：有新版時會提醒、清除快取與磁碟空間檢查、
-抑制亮星旁的暗環、選用的畸變修正、Drizzle 加速。設計規格見 [SPEC.md](SPEC.md)。
+目前版本 **0.4.0**：light 與 dark、flat、bias 整包加入，自動分類、自動配對校正檔；多個濾鏡一次疊完，彼此像素對齊；
+彩色相機用 CFA Drizzle；有 NVIDIA 顯示卡自動用 GPU 加速。0.4 新增：支援富士 X-Trans 相機的 RAW。設計規格見 [SPEC.md](SPEC.md)。
 
 ## 下載與安裝
 
@@ -148,6 +147,7 @@ Windows 版也可以由雲端 Windows 打包（`.github/workflows/build-windows.
 0.2 另有檔案分類、多濾鏡分組與像素對齊、dark 配對忽略濾鏡、flat 依觀測夜、做好的 master、合併光學系統、載入 Recipe、放大檢視、
 壞 frame（權重算不出來、對齊到別處）不拖垮 master、master 校正檔多行程與 GPU 結果一致、局部正規化對齊各張的梯度；
 0.3 另有快取管理與磁碟空間檢查、新版本提醒、內插限幅、畸變修正、同名檔的參考 frame。
+0.4 另有富士 X-Trans（排列、解馬賽克與白平衡、熱像素、找星、Drizzle）與畫質評測工具。
 
 程式碼檢查：`.venv\Scripts\python -m ruff check .`。推上 master 時雲端會自動跑 ruff 與核心測試。
 
@@ -165,6 +165,7 @@ Free and open source (MIT); the interface is available in English and Traditiona
 - NVIDIA GPU acceleration on Windows without installing CUDA; multi-core CPU otherwise
 - New in 0.3: update reminder, cache clearing and disk space checks, no dark rings around bright stars,
   optional distortion correction, faster Drizzle
+- New in 0.4: Fujifilm X-Trans RAW support
 
 **Download** the latest version from [Releases](https://github.com/ApuHuang/apu-photons/releases/latest)
 (Windows 10 / 11 64-bit, Mac Apple silicon and Intel) — no Python needed. On Windows, unzip and run `APUPhotons.exe`
