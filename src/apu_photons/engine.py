@@ -350,18 +350,30 @@ def _calib_key(f: Frame, signature: str) -> str:
     return h.hexdigest()[:20]
 
 
+def _fwhm_key(f: Frame) -> float:
+    return float(f.stars.fwhm) if np.isfinite(f.stars.fwhm) else math.inf
+
+
 def _rank_frames(frames: list[Frame]) -> list[Frame]:
-    """FWHM 低、星點多、背景低綜合評分，由好到壞。"""
+    """FWHM 低、星點多、背景低綜合評分，由好到壞。
+
+    順序跟輸入順序、排序演算法都無關（0.4.1）：同一個值同一個名次（比它好的有幾張），
+    總分同分時依序比 FWHM → 檔名 → 完整路徑。0.4.0 以前同值的名次由不穩定的 argsort 決定，
+    換一台電腦（numpy 在 x86 與 ARM 用不同的排序實作）可能選到不同的參考張。"""
     good = [f for f in frames if np.isfinite(f.stars.fwhm)] or list(frames)
 
     def rank(vals, reverse=False):
-        return np.argsort(np.argsort(-np.asarray(vals) if reverse else np.asarray(vals)))
+        v = np.asarray(vals, float)
+        v = np.where(np.isfinite(v), -v if reverse else v, np.inf)
+        return np.searchsorted(np.sort(v, kind="stable"), v, side="left")
 
-    fw = rank([f.stars.fwhm for f in good])
+    fw = rank([_fwhm_key(f) for f in good])
     ns = rank([len(f.stars) for f in good], reverse=True)
     bg = rank([f.stars.background / (f.exposure or 1.0) for f in good])
     score = fw * 2 + ns + bg
-    return [good[i] for i in np.argsort(score, kind="stable")]
+    order = sorted(range(len(good)),
+                   key=lambda i: (int(score[i]), _fwhm_key(good[i]), good[i].name, str(good[i].path)))
+    return [good[i] for i in order]
 
 
 def _find_frame(frames: list[Frame], ref: str) -> Frame | None:
@@ -506,8 +518,8 @@ def _grid_train(ag: AlignGroup, project: Project, s: Settings) -> str:
     trains = [project.trains[t] for t in ag.trains]
     known = [t for t in trains if t.pixel_scale_arcsec]
     if known:
-        return min(known, key=lambda t: t.pixel_scale_arcsec).id
-    return max(trains, key=lambda t: (t.focal_mm or 0)).id
+        return min(known, key=lambda t: (t.pixel_scale_arcsec, t.id)).id
+    return min(trains, key=lambda t: (-(t.focal_mm or 0), t.id)).id   # 同分時依編號，不依清單順序
 
 
 def _slug(text: str) -> str:

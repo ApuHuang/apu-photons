@@ -315,7 +315,7 @@ def _star_catalog(hp: np.ndarray, sigma: float, valid: np.ndarray, sat: float) -
     v = hp[ys, xs]
     keep = v < sat
     ys, xs, v = ys[keep], xs[keep], v[keep]
-    order = np.argsort(-v)
+    order = np.argsort(-v, kind="stable")
     if len(order) > MAX_SHAPE_STARS:  # 從各亮度均勻抽，不只挑最亮的
         order = order[np.linspace(0, len(order) - 1, MAX_SHAPE_STARS).astype(int)]
     rows = []
@@ -371,7 +371,7 @@ def _ringing(hp: np.ndarray, sigma: float, valid: np.ndarray, fwhm: float) -> tu
     ys, xs = _peaks(hp, valid, STAR_SIGMA * sigma, box=31)
     if not len(ys):
         return float("nan"), float("nan")
-    order = np.argsort(-hp[ys, xs])[:RING_STARS]
+    order = np.argsort(-hp[ys, xs], kind="stable")[:RING_STARS]
     R = int(max(8, round(6 * fwhm)))
     yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
     rad = np.hypot(yy, xx)
@@ -455,7 +455,7 @@ def measure(img: np.ndarray, label: str, path: str = "", artifacts: bool = True,
     if trail:
         rep.trail_z, rep.trail_angle, rep.trail_point, rep.pattern_z = _trail(hp, sigma, stars, valid)
     ys, xs = _peaks(hp, valid, STAR_SIGMA * sigma, box=31)
-    order = np.argsort(-hp[ys, xs])[:REGISTER_STARS]
+    order = np.argsort(-hp[ys, xs], kind="stable")[:REGISTER_STARS]
     bright = np.column_stack([xs[order], ys[order]]).astype(float)
     return Measured(rep, hp, sigma, cat, bright, valid & ~stars)
 

@@ -42,7 +42,7 @@ def _triangles(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         p = xy[[i, j, k]]
         # 頂點 v 的對邊長度
         opp = np.array([np.linalg.norm(p[1] - p[2]), np.linalg.norm(p[0] - p[2]), np.linalg.norm(p[0] - p[1])])
-        order = np.argsort(opp)
+        order = np.argsort(opp, kind="stable")  # 等腰時頂點順序固定
         a, b, c = opp[order]
         if c < 10 or a / c < 0.1:  # 太小或太扁的三角形不穩定
             continue

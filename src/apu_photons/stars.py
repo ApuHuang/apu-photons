@@ -88,8 +88,11 @@ def detect(data: np.ndarray, bayer: str | None) -> Stars:
     tbl = finder(sub)
     if tbl is None or len(tbl) == 0:
         return Stars(np.empty(0), np.empty(0), np.empty(0), float("nan"), bg_level, noise, 0.0)
-    tbl.sort("flux", reverse=True)
     xcol = "x_centroid" if "x_centroid" in tbl.colnames else "xcentroid"
+    # 由亮到暗；同亮度依 y、x（Table.sort 不穩定，同亮度的星在不同平台可能排出不同順序，
+    # 影響量 FWHM 用的前 SHAPE_STARS 顆與對齊用的三角形）
+    tbl = tbl[np.lexsort((np.asarray(tbl[xcol], float), np.asarray(tbl[xcol.replace("x", "y", 1)], float),
+                          -np.asarray(tbl["flux"], float)))]
     x = np.asarray(tbl[xcol], float)
     y = np.asarray(tbl[xcol.replace("x", "y", 1)], float)
     flux = np.asarray(tbl["flux"], float)
